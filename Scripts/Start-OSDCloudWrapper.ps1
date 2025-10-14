@@ -19,7 +19,7 @@ function Find-WindowsDrive {
   try { $d = Get-OSDCloudOSDrive -ErrorAction SilentlyContinue } catch {}
   if ($d -and (Test-Path ($d + "\Windows"))) { return $d }
   foreach ($l in 'C','D','E','F','G','H') {
-    if (Test-Path "$l`:\Windows\System32") { return "$l:" }
+    if (Test-Path "$l`:\Windows\System32") { return "$($l):" }
   }
   return $null
 }
