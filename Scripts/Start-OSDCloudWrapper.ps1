@@ -1,6 +1,4 @@
-# Start-OSDCloudWrapper.ps1
-# Aya OSDCloud minimal wrapper for public GitHub release assets
-
+# --- Aya OSDCloud Wrapper using latest release assets ---
 Write-Host "Aya OSDCloud start"
 
 # 1. Load OSDCloud in WinPE
@@ -49,12 +47,12 @@ function Invoke-Download {
     }
 }
 
-# 6. Inject Unattend from repo
+# 6. Inject Unattend from main branch
 Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/OSDCloud/main/Unattend/Unattend.xml" `
     -OutFile (Join-Path $panther "Unattend.xml")
 
-# 7. Download large media from Release v1
-$relBase = "https://github.com/JustinSparksAya/OSDCloud/releases/download/v1"
+# 7. Download large media from latest release
+$relBase = "https://github.com/JustinSparksAya/OSDCloud/releases/latest/download"
 
 Invoke-Download -Uri "$relBase/LenovoDiagnostics.zip" `
     -OutFile (Join-Path $tempDir "LenovoDiagnostics.zip")
@@ -62,11 +60,11 @@ Invoke-Download -Uri "$relBase/LenovoDiagnostics.zip" `
 Invoke-Download -Uri "$relBase/PassMark-BurnInTest.zip" `
     -OutFile (Join-Path $tempDir "PassMark-BurnInTest.zip")
 
-# 8. Stage activation script if present in repo
+# 8. Stage activation script
 Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/OSDCloud/main/Scripts/Activate-WindowsUsignOEMProductKey.ps1" `
     -OutFile (Join-Path $tempDir "Activate-WindowsUsignOEMProductKey.ps1")
 
-# 9. Create SetupComplete
+# 9. SetupComplete
 $setupComplete = @"
 @echo off
 powershell.exe -ExecutionPolicy Bypass -File "%SystemRoot%\Temp\Activate-WindowsUsignOEMProductKey.ps1"
