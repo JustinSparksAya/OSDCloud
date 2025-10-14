@@ -1,3 +1,6 @@
+$ts = "X:\OSDCloud\Logs\Transcript_{0:yyyyMMdd_HHmmss}.txt" -f (Get-Date)
+Start-Transcript -Path $ts -Force
+
 # --- Aya OSDCloud Wrapper using latest release assets ---
 Write-Host "Aya OSDCloud start"
 
@@ -5,15 +8,31 @@ Write-Host "Aya OSDCloud start"
 Invoke-Expression (Invoke-RestMethod 'https://sandbox.osdcloud.com')
 
 # 2. Optional defaults
-$OSDCloudDrive = "C:"
-$OSDLanguage   = "en-us"
-$OSDLicense    = "Retail"
+$ProgressPreference = 'SilentlyContinue'
 
 # 3. Apply OS
 Start-OSDCloud -OSBuild "11" -OSEdition "Pro" -OSLanguage "en-us" -OSLicense "Retail" -SkipAutopilot -ZTI
 
 # 4. Locate applied Windows and prep folders
-$osDrive  = Get-OSDCloudOSDrive
+function Find-WindowsDrive {
+  $d = $null
+  try { $d = Get-OSDCloudOSDrive -ErrorAction SilentlyContinue } catch {}
+  if ($d -and (Test-Path ($d + "\Windows"))) { return $d }
+  foreach ($l in 'C','D','E','F','G','H') {
+    if (Test-Path "$l`:\Windows\System32") { return "$l:" }
+  }
+  return $null
+}
+
+$deadline = (Get-Date).AddSeconds(30)
+do {
+  $osDrive = Find-WindowsDrive
+  if ($osDrive) { break }
+  Start-Sleep 2
+} while ((Get-Date) -lt $deadline)
+
+if (-not $osDrive) { throw "Couldn't locate the applied Windows drive." }
+
 $windows  = Join-Path $osDrive "Windows"
 $panther  = Join-Path $windows "Panther"
 $tempDir  = Join-Path $windows "Temp"
@@ -72,5 +91,7 @@ exit /b 0
 "@
 $setupComplete | Out-File -FilePath (Join-Path $setupDir "SetupComplete.cmd") -Encoding ascii -Force
 
+Stop-Transcript
+Read-Host "Press Enter to reboot"
 Write-Host "Staging complete. Rebooting"
 Restart-Computer
