@@ -11,7 +11,7 @@ Invoke-Expression (Invoke-RestMethod 'https://sandbox.osdcloud.com')
 $ProgressPreference = 'SilentlyContinue'
 
 # 3. Apply OS
-Start-OSDCloud -OSBuild "11" -OSEdition "Pro" -OSLanguage "en-us" -OSLicense "Retail" -SkipAutopilot -ZTI
+Start-OSDCloud -OSBuild "25H2" -OSEdition "Pro" -OSLanguage "en-us" -OSLicense "Retail" -SkipAutopilot -ZTI
 
 # 4. Locate applied Windows and prep folders
 function Find-WindowsDrive {
