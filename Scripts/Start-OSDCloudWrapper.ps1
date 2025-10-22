@@ -70,14 +70,47 @@ function Invoke-Download {
 Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/OSDCloud/main/Unattend/Unattend.xml" `
     -OutFile (Join-Path $panther "Unattend.xml")
 
-# 7. Download large media from latest release
+# 7. Download and stage hardware tools by manufacturer
 $relBase = "https://github.com/JustinSparksAya/OSDCloud/releases/latest/download"
 
-Invoke-Download -Uri "$relBase/LenovoDiagnostics.zip" `
-    -OutFile (Join-Path $tempDir "LenovoDiagnostics.zip")
+# Detect manufacturer (fallback safe)
+$manufacturer = ""
+try {
+    $manufacturer = (Get-WmiObject -Class Win32_ComputerSystem -ErrorAction Stop).Manufacturer
+} catch { $manufacturer = "" }
 
-Invoke-Download -Uri "$relBase/PassMark-BurnInTest.zip" `
-    -OutFile (Join-Path $tempDir "PassMark-BurnInTest.zip")
+$sys32 = Join-Path $windows "System32"
+
+if ($manufacturer -match 'Lenovo') {
+    Write-Host "Manufacturer detected: Lenovo — using LenovoDiagnostics.zip"
+    $zipName    = "LenovoDiagnostics.zip"
+    $extractDir = Join-Path $tempDir "LD"
+} else {
+    Write-Host "Manufacturer '$manufacturer' not Lenovo — using PassMark-BurnInTest.zip"
+    $zipName    = "PassMark-BurnInTest.zip"
+    $extractDir = Join-Path $tempDir "HD"
+}
+
+$zipPath = Join-Path $tempDir $zipName
+
+# Download selected zip
+Invoke-Download -Uri "$relBase/$zipName" -OutFile $zipPath
+
+# Extract to target folder (.\LD or .\HD under Windows\Temp)
+if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+Expand-Archive -LiteralPath $zipPath -DestinationPath $extractDir -Force
+
+# Copy HD.cmd and RA.cmd to System32 if they exist in the extracted folder
+foreach ($cmd in 'HD.cmd','RA.cmd') {
+    $found = Get-ChildItem -Path $extractDir -Filter $cmd -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($found) {
+        Copy-Item $found.FullName (Join-Path $sys32 $cmd) -Force
+        Write-Host "Copied $cmd to $sys32"
+    } else {
+        Write-Host "Notice: $cmd not found under $extractDir"
+    }
+}
+
 
 # 8. Stage activation script
 Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/OSDCloud/main/Scripts/Activate-WindowsUsignOEMProductKey.ps1" `
