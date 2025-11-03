@@ -78,9 +78,9 @@ Write-Host ("System now:      {0:yyyy-MM-dd HH:mm:ss.fff}" -f $after)
 ## Remove Device From Aya
 ##vvvvvvvvvvvvvvvvvvvvvvv
 
-Write-Host "******************************"
-Write-Host "***Removing Device from Aya***"
-Write-Host "******************************"
+Write-Host "##############################"
+Write-Host "###Removing Device from Aya###"
+Write-Host "##############################"
 
 # Import the certificate
 
@@ -285,6 +285,11 @@ if ($azureADDeviceIds.Count -eq 0) {
 ## Remove Device From Aya
 #########################
 
+Write-Host "###############################"
+Write-Host "###Starting OSDCloud Process###"
+Write-Host "###############################"
+
+
 # 1. Load OSDCloud in WinPE
 Invoke-Expression (Invoke-RestMethod 'https://sandbox.osdcloud.com')
 
@@ -351,6 +356,11 @@ function Invoke-Download {
 Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/OSDCloud/main/Unattend/Unattend.xml" `
     -OutFile (Join-Path $panther "Unattend.xml")
 
+
+Write-Host "#######################################"
+Write-Host "###Seeding Hardware Diagnostic tools###"
+Write-Host "#######################################"
+
 # 7. Download and stage hardware tools by manufacturer
 $relBase = "https://github.com/JustinSparksAya/OSDCloud/releases/latest/download"
 
@@ -392,6 +402,10 @@ foreach ($cmd in 'HD.cmd','RA.cmd') {
     }
 }
 
+Write-Host "###############################"
+Write-Host "###Staging Activation Script###"
+Write-Host "###############################"
+
 
 # 8. Stage activation script
 Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/OSDCloud/main/Scripts/Activate-WindowsUsignOEMProductKey.ps1" `
@@ -406,6 +420,10 @@ exit /b 0
 $setupComplete | Out-File -FilePath (Join-Path $setupDir "SetupComplete.cmd") -Encoding ascii -Force
 
 Stop-Transcript
+Write-Host "#########################"
+Write-Host "###Deployment Finished###"
+Write-Host "#########################"
+
 Read-Host "Press Enter to reboot"
 Write-Host "Staging complete. Rebooting"
 Restart-Computer
