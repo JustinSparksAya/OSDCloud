@@ -78,7 +78,7 @@ Write-Host ("System now:      {0:yyyy-MM-dd HH:mm:ss.fff}" -f $after)
 ## Remove Device From Aya
 ##vvvvvvvvvvvvvvvvvvvvvvv
 
-Write-Host "##############################"
+Write-Host "`r`n##############################"
 Write-Host "###Removing Device from Aya###"
 Write-Host "##############################"
 
@@ -285,7 +285,7 @@ if ($azureADDeviceIds.Count -eq 0) {
 ## Remove Device From Aya
 #########################
 
-Write-Host "###############################"
+Write-Host "`r`n###############################"
 Write-Host "###Starting OSDCloud Process###"
 Write-Host "###############################"
 
@@ -357,7 +357,7 @@ Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/OSDCloud
     -OutFile (Join-Path $panther "Unattend.xml")
 
 
-Write-Host "#######################################"
+Write-Host "`r`n#######################################"
 Write-Host "###Seeding Hardware Diagnostic tools###"
 Write-Host "#######################################"
 
@@ -402,7 +402,7 @@ foreach ($cmd in 'HD.cmd','RA.cmd') {
     }
 }
 
-Write-Host "###############################"
+Write-Host "`r`n###############################"
 Write-Host "###Staging Activation Script###"
 Write-Host "###############################"
 
@@ -411,19 +411,29 @@ Write-Host "###############################"
 Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/OSDCloud/main/Scripts/Activate-WindowsUsignOEMProductKey.ps1" `
     -OutFile (Join-Path $tempDir "Activate-WindowsUsignOEMProductKey.ps1")
 
-# 9. SetupComplete
-$setupComplete = @"
-@echo off
-powershell.exe -ExecutionPolicy Bypass -File "%SystemRoot%\Temp\Activate-WindowsUsignOEMProductKey.ps1"
-exit /b 0
-"@
-$setupComplete | Out-File -FilePath (Join-Path $setupDir "SetupComplete.cmd") -Encoding ascii -Force
+Write-Host "`r`n#####################################"
+Write-Host "###Staging WinPE Drivers for WinRE###"
+Write-Host "#####################################"
+
+# $tempDir should already be: <OSDrive>:\Windows\Temp  (offline OS)
+$DestDir = Join-Path $tempDir 'WPEDrivers'
+New-Item -ItemType Directory -Path $DestDir -Force | Out-Null
+
+$Log = Join-Path $DestDir 'WinPE-ExportDrivers.log'
+& dism.exe /online /export-driver "/destination:$DestDir" *> $Log
+
+Write-Host "`r`n###############################"
+Write-Host "###Staging SetupComplete.cmd###"
+Write-Host "###############################"
+# 8. Stage SetupComplete script
+Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/OSDCloud/main/Scripts/SetupComplete.cmd" `
+  -OutFile (Join-Path $setupDir "SetupComplete.cmd")
 
 Stop-Transcript
-Write-Host "#########################"
+Write-Host "`r`n#########################"
 Write-Host "###Deployment Finished###"
 Write-Host "#########################"
 
-Read-Host "Press Enter to reboot"
-Write-Host "Staging complete. Rebooting"
+Read-Host "`r`nPress Enter to reboot"
+Write-Host "`r`nStaging complete. Rebooting"
 Restart-Computer
