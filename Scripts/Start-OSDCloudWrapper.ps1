@@ -78,9 +78,9 @@ Write-Host ("System now:      {0:yyyy-MM-dd HH:mm:ss.fff}" -f $after)
 ## Remove Device From Aya
 ##vvvvvvvvvvvvvvvvvvvvvvv
 
-Write-Host "`r`n##############################"
-Write-Host "###Removing Device from Aya###"
-Write-Host "##############################"
+Write-Host "`r`n##############################" -ForegroundColor Cyan
+Write-Host "###Removing Device from Aya###" -ForegroundColor Cyan
+Write-Host "##############################" -ForegroundColor Cyan
 
 # Import the certificate
 
@@ -285,9 +285,9 @@ if ($azureADDeviceIds.Count -eq 0) {
 ## Remove Device From Aya
 #########################
 
-Write-Host "`r`n###############################"
-Write-Host "###Starting OSDCloud Process###"
-Write-Host "###############################"
+Write-Host "`r`n###############################" -ForegroundColor Cyan
+Write-Host "###Starting OSDCloud Process###" -ForegroundColor Cyan
+Write-Host "###############################" -ForegroundColor Cyan
 
 
 # 1. Load OSDCloud in WinPE
@@ -357,9 +357,9 @@ Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/OSDCloud
     -OutFile (Join-Path $panther "Unattend.xml")
 
 
-Write-Host "`r`n#######################################"
-Write-Host "###Seeding Hardware Diagnostic tools###"
-Write-Host "#######################################"
+Write-Host "`r`n#######################################" -ForegroundColor Cyan
+Write-Host "###Seeding Hardware Diagnostic tools###" -ForegroundColor Cyan
+Write-Host "#######################################" -ForegroundColor Cyan
 
 # 7. Download and stage hardware tools by manufacturer
 $relBase = "https://github.com/JustinSparksAya/OSDCloud/releases/latest/download"
@@ -402,18 +402,18 @@ foreach ($cmd in 'HD.cmd','RA.cmd') {
     }
 }
 
-Write-Host "`r`n###############################"
-Write-Host "###Staging Activation Script###"
-Write-Host "###############################"
+Write-Host "`r`n###############################" -ForegroundColor Cyan
+Write-Host "###Staging Activation Script###" -ForegroundColor Cyan
+Write-Host "###############################" -ForegroundColor Cyan
 
 
 # 8. Stage activation script
 Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/OSDCloud/main/Scripts/Activate-WindowsUsignOEMProductKey.ps1" `
     -OutFile (Join-Path $tempDir "Activate-WindowsUsignOEMProductKey.ps1")
 
-Write-Host "`r`n#####################################"
-Write-Host "###Staging WinPE Drivers for WinRE###"
-Write-Host "#####################################"
+Write-Host "`r`n#####################################" -ForegroundColor Cyan
+Write-Host "###Staging WinPE Drivers for WinRE###" -ForegroundColor Cyan
+Write-Host "#####################################" -ForegroundColor Cyan
 
 # $tempDir should already be: <OSDrive>:\Windows\Temp  (offline OS)
 $DestDir = Join-Path $tempDir 'WPEDrivers'
@@ -422,18 +422,19 @@ New-Item -ItemType Directory -Path $DestDir -Force | Out-Null
 $Log = Join-Path $DestDir 'WinPE-ExportDrivers.log'
 & dism.exe /online /export-driver "/destination:$DestDir" *> $Log
 
-Write-Host "`r`n###############################"
-Write-Host "###Staging SetupComplete.cmd###"
-Write-Host "###############################"
+Write-Host "`r`n###############################" -ForegroundColor Cyan
+Write-Host "###Staging SetupComplete.cmd###" -ForegroundColor Cyan
+Write-Host "###############################" -ForegroundColor Cyan
 # 8. Stage SetupComplete script
 Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/OSDCloud/main/Scripts/SetupComplete.cmd" `
   -OutFile (Join-Path $setupDir "SetupComplete.cmd")
 
 Stop-Transcript
-Write-Host "`r`n#########################"
-Write-Host "###Deployment Finished###"
-Write-Host "#########################"
+Write-Host "`r`n#########################" -ForegroundColor Cyan 
+Write-Host "###Deployment Finished###" -ForegroundColor Cyan
+Write-Host "#########################" -ForegroundColor Cyan
 
 Read-Host "`r`nPress Enter to reboot"
 Write-Host "`r`nStaging complete. Rebooting"
 Restart-Computer
+c:
