@@ -80,9 +80,9 @@ Write-Host ("System now:      {0:yyyy-MM-dd HH:mm:ss.fff}" -f $after)
 ## If on campuse's imaging workbench Campus, Remove Device From Aya
 ##vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
 
-$onSubnet = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-            Where-Object { $_.IPAddress -like $WorkbenchSubnet } |
-            Select-Object -First 1
+$onSubnet = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled=true" |
+    ForEach-Object { $_.IPAddress } |
+    Where-Object { $_ -match '^\d{1,3}(\.\d{1,3}){3}$' }
 
 If ($onSubnet) {
     Write-Host "`r`n##############################" -ForegroundColor Cyan
