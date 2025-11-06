@@ -4,6 +4,8 @@ Start-Transcript -Path $ts -Force
 # --- Aya OSDCloud Wrapper using latest release assets ---
 Write-Host "Aya OSDCloud start"
 
+$WorkbenchSubnet = '10.40.222.*'
+
 ###############################
 ## Start Date Time Sync Section
 ##vvvvvvvvvvvvvvvvvvvvvvvvvvvvv
@@ -74,251 +76,260 @@ Write-Host ("System now:      {0:yyyy-MM-dd HH:mm:ss.fff}" -f $after)
 ## End Date Time Sync Section
 #############################
 
-#########################
-## Remove Device From Aya
-##vvvvvvvvvvvvvvvvvvvvvvv
+###################################################################
+## If on campuse's imaging workbench Campus, Remove Device From Aya
+##vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
 
-Write-Host "`r`n##############################" -ForegroundColor Cyan
-Write-Host "###Removing Device from Aya###" -ForegroundColor Cyan
-Write-Host "##############################" -ForegroundColor Cyan
+$onSubnet = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { $_.IPAddress -like $WorkbenchSubnet } |
+            Select-Object -First 1
 
-#Connecting to Network share
-$User  = 'SysMDT'
-$Share = '\\corp-wds-02\DeploymentShare2'
-$Drive = 'Z:'
-$Enc   = '76492d1116743f0423413b16050a5345MgB8AG4AQgBqAFAAYQBDAGoANwBwAG8AMgA2AGEAMQA4AE0AUABBAEkAaABDAEEAPQA9AHwAMAA2ADkANQAyAGYAMQBjADgANQBiADQAOQAzADMAYwA0AGQAMQBkAGUAMABkAGEAZAAxADIANgBhADEANQBhADMANQAxAGIAZQAwAGQAMQBjADcANAA5ADIAYwA3ADEANgAxAGUANQBlAGQANwBhAGEAMQA3AGUAZQAzADIAZgA='
-[byte[]]$Key = @(17,208,162,81,196,107,230,240,247,48,225,30,25,178,96,8,134,161,94,80,51,221,61,197,76,180,28,105,205,232,241,148)
-# ======================
+If ($onSubnet) {
+    Write-Host "`r`n##############################" -ForegroundColor Cyan
+    Write-Host "###Removing Device from Aya###" -ForegroundColor Cyan
+    Write-Host "##############################" -ForegroundColor Cyan
 
-# Recreate the SecureString in memory
-$Sec = ConvertTo-SecureString -String $Enc -Key $Key
+    #Connecting to Network share
+    $User  = 'SysMDT'
+    $Share = '\\corp-wds-02\DeploymentShare2'
+    $Drive = 'Z:'
+    $Enc   = '76492d1116743f0423413b16050a5345MgB8AG4AQgBqAFAAYQBDAGoANwBwAG8AMgA2AGEAMQA4AE0AUABBAEkAaABDAEEAPQA9AHwAMAA2ADkANQAyAGYAMQBjADgANQBiADQAOQAzADMAYwA0AGQAMQBkAGUAMABkAGEAZAAxADIANgBhADEANQBhADMANQAxAGIAZQAwAGQAMQBjADcANAA5ADIAYwA3ADEANgAxAGUANQBlAGQANwBhAGEAMQA3AGUAZQAzADIAZgA='
+    [byte[]]$Key = @(17,208,162,81,196,107,230,240,247,48,225,30,25,178,96,8,134,161,94,80,51,221,61,197,76,180,28,105,205,232,241,148)
+    # ======================
 
-# Extract a plain string for the native tool call
-$BSTR  = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Sec)
-$Plain = [Runtime.InteropServices.Marshal]::PtrToStringUni($BSTR)
+    # Recreate the SecureString in memory
+    $Sec = ConvertTo-SecureString -String $Enc -Key $Key
 
-# Map with net use
-$rc = Start-Process -FilePath net.exe `
-    -ArgumentList @('use', $Drive, $Share, "/user:$User", $Plain, '/persistent:no') `
-    -NoNewWindow -Wait -PassThru
+    # Extract a plain string for the native tool call
+    $BSTR  = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Sec)
+    $Plain = [Runtime.InteropServices.Marshal]::PtrToStringUni($BSTR)
 
-# Clean up sensitive material in memory
-[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTR)
-$Plain = $null
-[System.GC]::Collect()
-[System.GC]::WaitForPendingFinalizers()
+    # Map with net use
+    $rc = Start-Process -FilePath net.exe `
+        -ArgumentList @('use', $Drive, $Share, "/user:$User", $Plain, '/persistent:no') `
+        -NoNewWindow -Wait -PassThru
 
-if ($rc.ExitCode -eq 0) {
-    Write-Host "Mapped $Drive to $Share as $User."
-} else {
-    Write-Host "Mapping failed. Exit code: $($rc.ExitCode)"
-    exit 1
-}
+    # Clean up sensitive material in memory
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTR)
+    $Plain = $null
+    [System.GC]::Collect()
+    [System.GC]::WaitForPendingFinalizers()
 
-# Optional verification
-if (Test-Path "$Drive\") {
-    Write-Host "$Drive is accessible."
-} else {
-    Write-Host "$Drive is not accessible after mapping."
-    exit 1
-}
-
-# Import the certificate
-Write-Host "Importing Certificate"
-$CertPath = 'Z:\Scripts\OSDCloud_Certificate\osdcloud-20251103.pfx'
-$cert  = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($CertPath,"CertPassword")
-$store = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root','LocalMachine')
-$store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-$store.Add($cert)
-$store.Close()
-
-
-
-# --- Set variables ---
-
-$clientId = "0df5ca16-daf3-40bc-9b44-567253b54baa"
-$clientThumbprint = "2C9B6CD1B27D959851505E53CCB05B7105796FB8"
-$tenantId = "c32ce235-4d9a-4296-a647-a9edb2912ac9"
-
-
-# Get the certificate from the certificate store
-$cert = Get-Item Cert:\LocalMachine\Root\$clientThumbprint
-
-# Create JWT header
-$JWTHeader = @{
-    alg = "RS256"
-    typ = "JWT"
-    x5t = [System.Convert]::ToBase64String($cert.GetCertHash())
-}
-# Create JWT payload
-$JWTPayload = @{
-    aud = "https://login.microsoftonline.com/$tenantId/oauth2/v2.0/token"
-    iss = $clientId
-    sub = $clientId
-    jti = [System.Guid]::NewGuid().ToString()
-    nbf = [math]::Round((Get-Date).ToUniversalTime().Subtract((Get-Date "1970-01-01T00:00:00Z").ToUniversalTime()).TotalSeconds)
-    exp = [math]::Round((Get-Date).ToUniversalTime().AddMinutes(10).Subtract((Get-Date "1970-01-01T00:00:00Z").ToUniversalTime()).TotalSeconds)
-}
-
-# Encode JWT header and payload
-$JWTHeaderToByte = [System.Text.Encoding]::UTF8.GetBytes(($JWTHeader | ConvertTo-Json -Compress))
-$EncodedHeader = [System.Convert]::ToBase64String($JWTHeaderToByte) -replace '\+', '-' -replace '/', '_' -replace '='
-
-$JWTPayLoadToByte = [System.Text.Encoding]::UTF8.GetBytes(($JWTPayload | ConvertTo-Json -Compress))
-$EncodedPayload = [System.Convert]::ToBase64String($JWTPayLoadToByte) -replace '\+', '-' -replace '/', '_' -replace '='
-
-# Join header and Payload with "." to create a valid (unsigned) JWT
-$JWT = $EncodedHeader + "." + $EncodedPayload
-
-# Get the private key object of your certificate
-$PrivateKey = ([System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert))
-
-# Define RSA signature and hashing algorithm
-$RSAPadding = [Security.Cryptography.RSASignaturePadding]::Pkcs1
-$HashAlgorithm = [Security.Cryptography.HashAlgorithmName]::SHA256
-
-# Create a signature of the JWT
-$Signature = [Convert]::ToBase64String(
-    $PrivateKey.SignData([System.Text.Encoding]::UTF8.GetBytes($JWT), $HashAlgorithm, $RSAPadding)
-) -replace '\+', '-' -replace '/', '_' -replace '='
-
-# Join the signature to the JWT with "."
-$JWT = $JWT + "." + $Signature
-
-
-# --- Get Serial Number ---
-try {
-    $serialNumber = (Get-WmiObject -Class Win32_BIOS).SerialNumber.Trim()
-    Write-Host "Serial Number: $serialNumber"
-} catch {
-    Write-Host "Failed to get serial number"
-    try { $null = Stop-Transcript -ErrorAction Stop | Out-Null } catch {}
-    exit 1
-}
-
-# --- Get Auth Token ---
-$body = @{
-    grant_type    = "client_credentials"
-    scope         = "https://graph.microsoft.com/.default"
-    client_id     = $clientId
-    client_assertion_type = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
-    client_assertion = $JWT
-}
-
-Write-Host "Getting Authentication Token"
-
-try {
-    $tokenResponse = Invoke-RestMethod -Method Post -Uri "https://login.microsoftonline.com/$tenantId/oauth2/v2.0/token" -Body $body
-    $token = $tokenResponse.access_token
-} catch {
-    Write-Host "Failed to get token"
-    exit 1
-}
-
-# --- Initialize ---
-$azureADDeviceIds = [System.Collections.Generic.HashSet[string]]::new()
-
-Write-Host "Removing Device from InTune..."
-# --- Intune Lookup ---
-$intuneUri = "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices?`$filter=serialNumber eq '$serialNumber'"
-try {
-    $intuneResponse = Invoke-RestMethod -Headers @{ Authorization = "Bearer $token" } -Uri $intuneUri -Method Get
-    if ($intuneResponse.value.Count -gt 0) {
-        $deviceId = $intuneResponse.value[0].id
-        $azureADDeviceId_Intune = $intuneResponse.value[0].azureADDeviceId
-        if (![string]::IsNullOrWhiteSpace($azureADDeviceId_Intune)) {
-            $azureADDeviceIds.Add($azureADDeviceId_Intune) | Out-Null
-        }
-
-        # Delete from Intune
-        $deleteIntuneUri = "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$deviceId"
-        try {
-            Invoke-RestMethod -Headers @{ Authorization = "Bearer $token" } -Uri $deleteIntuneUri -Method Delete
-            Write-Host "Device $serialNumber deleted from Intune."
-        } catch {
-            Write-Host "Failed to delete device from Intune."
-        }
+    if ($rc.ExitCode -eq 0) {
+        Write-Host "Mapped $Drive to $Share as $User."
     } else {
-        Write-Host "No device found in Intune. Continuing with Autopilot and Entra checks."
+        Write-Host "Mapping failed. Exit code: $($rc.ExitCode)"
+        exit 1
     }
-} catch {
-    Write-Host "Error querying device from Intune. Continuing."
-}
 
-Write-Host "Removing Device from Autopilot..."
-# --- Autopilot Lookup ---
-$apUri = "https://graph.microsoft.com/v1.0/deviceManagement/windowsAutopilotDeviceIdentities?`$filter=contains(serialNumber,'$serialNumber')"
-try {
-    $apResponse = Invoke-RestMethod -Headers @{ Authorization = "Bearer $token" } -Uri $apUri -Method Get
-    if ($apResponse.value.Count -gt 0) {
-        $apId = $apResponse.value[0].id
-        $azureADDeviceId_Autopilot = $apResponse.value[0].azureActiveDirectoryDeviceId
-        if (![string]::IsNullOrWhiteSpace($azureADDeviceId_Autopilot)) {
-            $azureADDeviceIds.Add($azureADDeviceId_Autopilot) | Out-Null
-        }
-
-        # Delete Autopilot registration
-        $apDeleteUri = "https://graph.microsoft.com/v1.0/deviceManagement/windowsAutopilotDeviceIdentities/$apId"
-        try {
-            Invoke-RestMethod -Headers @{ Authorization = "Bearer $token" } -Uri $apDeleteUri -Method Delete
-            Write-Host "Autopilot registration deleted for device $serialNumber."
-        } catch {
-            Write-Host "Failed to delete Autopilot record. Skipping Entra deletion."
-            exit 1
-        }
-
-        # Wait for deletion
-        $maxWait = 60
-        $elapsed = 0
-        $interval = 5
-        while ($elapsed -lt $maxWait) {
-            Start-Sleep -Seconds $interval
-            $elapsed += $interval
-            try {
-                $check = Invoke-RestMethod -Headers @{ Authorization = "Bearer $token" } -Uri $apUri -Method Get
-                if ($check.value.Count -eq 0) {
-                    Write-Host "Autopilot record fully removed."
-                    break
-                }
-                Write-Host "Waiting for Autopilot record to clear..."
-            } catch {
-                Write-Host "Error checking Autopilot status."
-            }
-        }
+    # Optional verification
+    if (Test-Path "$Drive\") {
+        Write-Host "$Drive is accessible."
     } else {
-        Write-Host "No Autopilot registration found."
+        Write-Host "$Drive is not accessible after mapping."
+        exit 1
     }
-} catch {
-    Write-Host "Error querying Autopilot records."
-}
 
-Write-Host "Removing Device from EntraID..."
-# --- Entra Cleanup for All Unique Device IDs ---
-foreach ($azureDeviceId in $azureADDeviceIds) {
-    $entraLookupUri = "https://graph.microsoft.com/v1.0/devices?`$filter=deviceId eq '$azureDeviceId'"
+    # Import the certificate
+    Write-Host "Importing Certificate"
+    $CertPath = 'Z:\Scripts\OSDCloud_Certificate\osdcloud-20251103.pfx'
+    $cert  = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($CertPath,"CertPassword")
+    $store = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root','LocalMachine')
+    $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+    $store.Add($cert)
+    $store.Close()
+
+
+
+    # --- Set variables ---
+
+    $clientId = "0df5ca16-daf3-40bc-9b44-567253b54baa"
+    $clientThumbprint = "2C9B6CD1B27D959851505E53CCB05B7105796FB8"
+    $tenantId = "c32ce235-4d9a-4296-a647-a9edb2912ac9"
+
+
+    # Get the certificate from the certificate store
+    $cert = Get-Item Cert:\LocalMachine\Root\$clientThumbprint
+
+    # Create JWT header
+    $JWTHeader = @{
+        alg = "RS256"
+        typ = "JWT"
+        x5t = [System.Convert]::ToBase64String($cert.GetCertHash())
+    }
+    # Create JWT payload
+    $JWTPayload = @{
+        aud = "https://login.microsoftonline.com/$tenantId/oauth2/v2.0/token"
+        iss = $clientId
+        sub = $clientId
+        jti = [System.Guid]::NewGuid().ToString()
+        nbf = [math]::Round((Get-Date).ToUniversalTime().Subtract((Get-Date "1970-01-01T00:00:00Z").ToUniversalTime()).TotalSeconds)
+        exp = [math]::Round((Get-Date).ToUniversalTime().AddMinutes(10).Subtract((Get-Date "1970-01-01T00:00:00Z").ToUniversalTime()).TotalSeconds)
+    }
+
+    # Encode JWT header and payload
+    $JWTHeaderToByte = [System.Text.Encoding]::UTF8.GetBytes(($JWTHeader | ConvertTo-Json -Compress))
+    $EncodedHeader = [System.Convert]::ToBase64String($JWTHeaderToByte) -replace '\+', '-' -replace '/', '_' -replace '='
+
+    $JWTPayLoadToByte = [System.Text.Encoding]::UTF8.GetBytes(($JWTPayload | ConvertTo-Json -Compress))
+    $EncodedPayload = [System.Convert]::ToBase64String($JWTPayLoadToByte) -replace '\+', '-' -replace '/', '_' -replace '='
+
+    # Join header and Payload with "." to create a valid (unsigned) JWT
+    $JWT = $EncodedHeader + "." + $EncodedPayload
+
+    # Get the private key object of your certificate
+    $PrivateKey = ([System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert))
+
+    # Define RSA signature and hashing algorithm
+    $RSAPadding = [Security.Cryptography.RSASignaturePadding]::Pkcs1
+    $HashAlgorithm = [Security.Cryptography.HashAlgorithmName]::SHA256
+
+    # Create a signature of the JWT
+    $Signature = [Convert]::ToBase64String(
+        $PrivateKey.SignData([System.Text.Encoding]::UTF8.GetBytes($JWT), $HashAlgorithm, $RSAPadding)
+    ) -replace '\+', '-' -replace '/', '_' -replace '='
+
+    # Join the signature to the JWT with "."
+    $JWT = $JWT + "." + $Signature
+
+
+    # --- Get Serial Number ---
     try {
-        $aadResponse = Invoke-RestMethod -Headers @{ Authorization = "Bearer $token" } -Uri $entraLookupUri -Method Get
-        if ($aadResponse.value.Count -gt 0) {
-            $objectId = $aadResponse.value[0].id
-            $aadDeleteUri = "https://graph.microsoft.com/v1.0/devices/$objectId"
+        $serialNumber = (Get-WmiObject -Class Win32_BIOS).SerialNumber.Trim()
+        Write-Host "Serial Number: $serialNumber"
+    } catch {
+        Write-Host "Failed to get serial number"
+        try { $null = Stop-Transcript -ErrorAction Stop | Out-Null } catch {}
+        exit 1
+    }
+
+    # --- Get Auth Token ---
+    $body = @{
+        grant_type    = "client_credentials"
+        scope         = "https://graph.microsoft.com/.default"
+        client_id     = $clientId
+        client_assertion_type = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+        client_assertion = $JWT
+    }
+
+    Write-Host "Getting Authentication Token"
+
+    try {
+        $tokenResponse = Invoke-RestMethod -Method Post -Uri "https://login.microsoftonline.com/$tenantId/oauth2/v2.0/token" -Body $body
+        $token = $tokenResponse.access_token
+    } catch {
+        Write-Host "Failed to get token"
+        exit 1
+    }
+
+    # --- Initialize ---
+    $azureADDeviceIds = [System.Collections.Generic.HashSet[string]]::new()
+
+    Write-Host "Removing Device from InTune..."
+    # --- Intune Lookup ---
+    $intuneUri = "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices?`$filter=serialNumber eq '$serialNumber'"
+    try {
+        $intuneResponse = Invoke-RestMethod -Headers @{ Authorization = "Bearer $token" } -Uri $intuneUri -Method Get
+        if ($intuneResponse.value.Count -gt 0) {
+            $deviceId = $intuneResponse.value[0].id
+            $azureADDeviceId_Intune = $intuneResponse.value[0].azureADDeviceId
+            if (![string]::IsNullOrWhiteSpace($azureADDeviceId_Intune)) {
+                $azureADDeviceIds.Add($azureADDeviceId_Intune) | Out-Null
+            }
+
+            # Delete from Intune
+            $deleteIntuneUri = "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$deviceId"
             try {
-                Invoke-RestMethod -Headers @{ Authorization = "Bearer $token" } -Uri $aadDeleteUri -Method Delete
-                Write-Host "Device with Azure ID $azureDeviceId deleted from Entra ID."
+                Invoke-RestMethod -Headers @{ Authorization = "Bearer $token" } -Uri $deleteIntuneUri -Method Delete
+                Write-Host "Device $serialNumber deleted from Intune."
             } catch {
-                Write-Host "Failed to delete device $azureDeviceId from Entra ID."
+                Write-Host "Failed to delete device from Intune."
             }
         } else {
-            Write-Host "No matching Entra device found for Azure ID $azureDeviceId."
+            Write-Host "No device found in Intune. Continuing with Autopilot and Entra checks."
         }
     } catch {
-        Write-Host "Error querying Entra for Azure ID $azureDeviceId."
+        Write-Host "Error querying device from Intune. Continuing."
     }
-}
 
-if ($azureADDeviceIds.Count -eq 0) {
-    Write-Host "No Azure AD Device IDs found in Intune or Autopilot."
-}
+    Write-Host "Removing Device from Autopilot..."
+    # --- Autopilot Lookup ---
+    $apUri = "https://graph.microsoft.com/v1.0/deviceManagement/windowsAutopilotDeviceIdentities?`$filter=contains(serialNumber,'$serialNumber')"
+    try {
+        $apResponse = Invoke-RestMethod -Headers @{ Authorization = "Bearer $token" } -Uri $apUri -Method Get
+        if ($apResponse.value.Count -gt 0) {
+            $apId = $apResponse.value[0].id
+            $azureADDeviceId_Autopilot = $apResponse.value[0].azureActiveDirectoryDeviceId
+            if (![string]::IsNullOrWhiteSpace($azureADDeviceId_Autopilot)) {
+                $azureADDeviceIds.Add($azureADDeviceId_Autopilot) | Out-Null
+            }
 
+            # Delete Autopilot registration
+            $apDeleteUri = "https://graph.microsoft.com/v1.0/deviceManagement/windowsAutopilotDeviceIdentities/$apId"
+            try {
+                Invoke-RestMethod -Headers @{ Authorization = "Bearer $token" } -Uri $apDeleteUri -Method Delete
+                Write-Host "Autopilot registration deleted for device $serialNumber."
+            } catch {
+                Write-Host "Failed to delete Autopilot record. Skipping Entra deletion."
+                exit 1
+            }
+
+            # Wait for deletion
+            $maxWait = 60
+            $elapsed = 0
+            $interval = 5
+            while ($elapsed -lt $maxWait) {
+                Start-Sleep -Seconds $interval
+                $elapsed += $interval
+                try {
+                    $check = Invoke-RestMethod -Headers @{ Authorization = "Bearer $token" } -Uri $apUri -Method Get
+                    if ($check.value.Count -eq 0) {
+                        Write-Host "Autopilot record fully removed."
+                        break
+                    }
+                    Write-Host "Waiting for Autopilot record to clear..."
+                } catch {
+                    Write-Host "Error checking Autopilot status."
+                }
+            }
+        } else {
+            Write-Host "No Autopilot registration found."
+        }
+    } catch {
+        Write-Host "Error querying Autopilot records."
+    }
+
+    Write-Host "Removing Device from EntraID..."
+    # --- Entra Cleanup for All Unique Device IDs ---
+    foreach ($azureDeviceId in $azureADDeviceIds) {
+        $entraLookupUri = "https://graph.microsoft.com/v1.0/devices?`$filter=deviceId eq '$azureDeviceId'"
+        try {
+            $aadResponse = Invoke-RestMethod -Headers @{ Authorization = "Bearer $token" } -Uri $entraLookupUri -Method Get
+            if ($aadResponse.value.Count -gt 0) {
+                $objectId = $aadResponse.value[0].id
+                $aadDeleteUri = "https://graph.microsoft.com/v1.0/devices/$objectId"
+                try {
+                    Invoke-RestMethod -Headers @{ Authorization = "Bearer $token" } -Uri $aadDeleteUri -Method Delete
+                    Write-Host "Device with Azure ID $azureDeviceId deleted from Entra ID."
+                } catch {
+                    Write-Host "Failed to delete device $azureDeviceId from Entra ID."
+                }
+            } else {
+                Write-Host "No matching Entra device found for Azure ID $azureDeviceId."
+            }
+        } catch {
+            Write-Host "Error querying Entra for Azure ID $azureDeviceId."
+        }
+    }
+
+    if ($azureADDeviceIds.Count -eq 0) {
+        Write-Host "No Azure AD Device IDs found in Intune or Autopilot."
+    }
+} Ekse {
+    Write-Host "`r`n###########################################" -ForegroundColor Cyan
+    Write-Host "###Imaging Off Campus, Skipping Aya Cleanup###" -ForegroundColor Cyan
+    Write-Host "##############################################" -ForegroundColor Cyan
+}
 
 ##^^^^^^^^^^^^^^^^^^^^^^^
 ## Remove Device From Aya
