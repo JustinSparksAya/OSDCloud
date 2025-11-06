@@ -82,7 +82,7 @@ Write-Host ("System now:      {0:yyyy-MM-dd HH:mm:ss.fff}" -f $after)
 
 $onSubnet = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled=true" |
     ForEach-Object { $_.IPAddress } |
-    Where-Object { $_ -match '^\d{1,3}(\.\d{1,3}){3}$' }
+    Where-Object { $_ -match $WorkbenchSubnet }
 
 If ($onSubnet) {
     Write-Host "`r`n##############################" -ForegroundColor Cyan
