@@ -82,9 +82,48 @@ Write-Host "`r`n##############################" -ForegroundColor Cyan
 Write-Host "###Removing Device from Aya###" -ForegroundColor Cyan
 Write-Host "##############################" -ForegroundColor Cyan
 
+#Connecting to Network share
+$User  = 'SysMDT'
+$Share = '\\corp-wds-02\DeploymentShare2'
+$Drive = 'Z:'
+$Enc   = '76492d1116743f0423413b16050a5345MgB8AG4AQgBqAFAAYQBDAGoANwBwAG8AMgA2AGEAMQA4AE0AUABBAEkAaABDAEEAPQA9AHwAMAA2ADkANQAyAGYAMQBjADgANQBiADQAOQAzADMAYwA0AGQAMQBkAGUAMABkAGEAZAAxADIANgBhADEANQBhADMANQAxAGIAZQAwAGQAMQBjADcANAA5ADIAYwA3ADEANgAxAGUANQBlAGQANwBhAGEAMQA3AGUAZQAzADIAZgA='
+[byte[]]$Key = @(17,208,162,81,196,107,230,240,247,48,225,30,25,178,96,8,134,161,94,80,51,221,61,197,76,180,28,105,205,232,241,148)
+# ======================
+
+# Recreate the SecureString in memory
+$Sec = ConvertTo-SecureString -String $Enc -Key $Key
+
+# Extract a plain string for the native tool call
+$BSTR  = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Sec)
+$Plain = [Runtime.InteropServices.Marshal]::PtrToStringUni($BSTR)
+
+# Map with net use
+$rc = Start-Process -FilePath net.exe `
+    -ArgumentList @('use', $Drive, $Share, "/user:$User", $Plain, '/persistent:no') `
+    -NoNewWindow -Wait -PassThru
+
+# Clean up sensitive material in memory
+[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTR)
+$Plain = $null
+[System.GC]::Collect()
+[System.GC]::WaitForPendingFinalizers()
+
+if ($rc.ExitCode -eq 0) {
+    Write-Host "Mapped $Drive to $Share as $User."
+} else {
+    Write-Host "Mapping failed. Exit code: $($rc.ExitCode)"
+    exit 1
+}
+
+# Optional verification
+if (Test-Path "$Drive\") {
+    Write-Host "$Drive is accessible."
+} else {
+    Write-Host "$Drive is not accessible after mapping."
+    exit 1
+}
+
 # Import the certificate
-
-
 Write-Host "Importing Certificate"
 $CertPath = 'Z:\Scripts\OSDCloud_Certificate\osdcloud-20251103.pfx'
 $cert  = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($CertPath,"CertPassword")
