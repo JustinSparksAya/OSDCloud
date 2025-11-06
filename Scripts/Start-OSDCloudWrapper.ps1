@@ -325,7 +325,7 @@ If ($onSubnet) {
     if ($azureADDeviceIds.Count -eq 0) {
         Write-Host "No Azure AD Device IDs found in Intune or Autopilot."
     }
-} Ekse {
+} Else {
     Write-Host "`r`n###########################################" -ForegroundColor Cyan
     Write-Host "###Imaging Off Campus, Skipping Aya Cleanup###" -ForegroundColor Cyan
     Write-Host "##############################################" -ForegroundColor Cyan
