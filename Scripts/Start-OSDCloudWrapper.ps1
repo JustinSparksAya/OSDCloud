@@ -326,7 +326,7 @@ If ($onSubnet) {
         Write-Host "No Azure AD Device IDs found in Intune or Autopilot."
     }
 } Else {
-    Write-Host "`r`n###########################################" -ForegroundColor Cyan
+    Write-Host "`r`n##############################################" -ForegroundColor Cyan
     Write-Host "###Imaging Off Campus, Skipping Aya Cleanup###" -ForegroundColor Cyan
     Write-Host "##############################################" -ForegroundColor Cyan
 }
@@ -334,6 +334,33 @@ If ($onSubnet) {
 ##^^^^^^^^^^^^^^^^^^^^^^^
 ## Remove Device From Aya
 #########################
+
+##################################
+## Install the latest Curl version
+##vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+$u = "https://curl.se/windows/latest.cgi?p=win64-mingw.zip"
+$t = "$env:TEMP\curl.zip"
+$d = "$env:TEMP\curl"
+
+Invoke-WebRequest -Uri $u -OutFile $t -UseBasicParsing
+if (Test-Path $d) { Remove-Item $d -Recurse -Force }
+Expand-Archive -Path $t -DestinationPath $d -Force
+$exe = Get-ChildItem -Path $d -Recurse -Filter "curl.exe" | Select-Object -First 1
+if ($exe) { Copy-Item $exe.FullName "X:\Windows\System32\curl.exe" -Force 
+    Write-Host "`r`n######################" -ForegroundColor Cyan
+    Write-Host "### Installed Curl ###" -ForegroundColor Cyan
+    Write-Host "######################" -ForegroundColor Cyan
+} else {
+    Write-Host "`r`n##############################" -ForegroundColor Cyan
+    Write-Host "### Failed Installing Curl ###" -ForegroundColor Cyan
+    Write-Host "##############################" -ForegroundColor Cyan
+}
+Remove-Item $t -Force
+
+##^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+## End Install the latest Curl version
+######################################
+
 
 Write-Host "`r`n###############################" -ForegroundColor Cyan
 Write-Host "###Starting OSDCloud Process###" -ForegroundColor Cyan
