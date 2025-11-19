@@ -1,4 +1,4 @@
-﻿$ts = "X:\OSDCloud\Logs\Transcript_{0:yyyyMMdd_HHmmss}.txt" -f (Get-Date)
+$ts = "X:\OSDCloud\Logs\Transcript_{0:yyyyMMdd_HHmmss}.txt" -f (Get-Date)
 Start-Transcript -Path $ts -Force
 
 # --- Aya OSDCloud Wrapper using latest release assets ---
@@ -450,11 +450,11 @@ try {
 $sys32 = Join-Path $windows "System32"
 
 if ($manufacturer -match 'Lenovo') {
-    Write-Host "Manufacturer detected: Lenovo — using LenovoDiagnostics.zip"
+    Write-Host "Manufacturer detected: Lenovo - using LenovoDiagnostics.zip"
     $zipName    = "LenovoDiagnostics.zip"
     $extractDir = Join-Path $tempDir "LD"
 } else {
-    Write-Host "Manufacturer '$manufacturer' not Lenovo — using PassMark-BurnInTest.zip"
+    Write-Host "Manufacturer '$manufacturer' not Lenovo - using PassMark-BurnInTest.zip"
     $zipName    = "PassMark-BurnInTest.zip"
     $extractDir = Join-Path $tempDir "HD"
 }
@@ -525,10 +525,26 @@ function Send-TeamsNotificationViaWorkflow {
         $drive = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
         $disk  = if ($drive) { 'C: Total Size: {0:N2} GB' -f ($drive.Size / 1GB) } else { 'N/A' }
 
-        $net = Get-NetIPConfiguration | Where-Object { $_.IPv4Address -and $_.NetAdapter.Status -eq 'Up' } | Select-Object -First 1
+        $net = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled=TRUE" |
+        ForEach-Object {
+            $a = Get-CimInstance Win32_NetworkAdapter -Filter "Index=$($_.Index)"
+            $ipv4 = @($_.IPAddress) | Where-Object { $_ -match '^\d{1,3}(\.\d{1,3}){3}$' } | Select-Object -First 1
+            if ($a.NetEnabled -and $a.NetConnectionStatus -eq 2 -and $ipv4) {
+                [pscustomobject]@{
+                    IPv4Address = [pscustomobject]@{ IPAddress = $ipv4 }
+                    NetAdapter  = [pscustomobject]@{
+                        InterfaceAlias = $a.NetConnectionID
+                        MacAddress     = $a.MACAddress
+                        Status         = 'Up'
+                    }
+                }
+            }
+        } | Select-Object -First 1
+
         $adapter = if ($net) { ($net.NetAdapter.InterfaceAlias -replace '\d+', '').Trim() } else { 'N/A' }
         $mac     = if ($net) { ($net.NetAdapter.MacAddress -replace '-', ':') } else { 'N/A' }
         $ipv4    = if ($net) { $net.IPv4Address.IPAddress } else { 'N/A' }
+
 
         $secondaryModel = $null
         if ($cs.Manufacturer -eq 'Lenovo') {
@@ -584,7 +600,7 @@ function Send-TeamsNotificationViaWorkflow {
         ) + $rows
     }
 
-    # --- Payload wrapper your Flow expects (Parse JSON → Post card) ---
+    # --- Payload wrapper your Flow expects (Parse JSON -> Post card) ---
     $payload = @{
         content = @{
             title       = $title
@@ -630,4 +646,3 @@ Write-Host "#########################" -ForegroundColor Cyan
 Read-Host "`r`nPress Enter to reboot"
 Write-Host "`r`nStaging complete. Rebooting"
 Restart-Computer
-c:
