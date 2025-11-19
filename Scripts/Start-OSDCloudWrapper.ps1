@@ -1,4 +1,4 @@
-$ts = "X:\OSDCloud\Logs\Transcript_{0:yyyyMMdd_HHmmss}.txt" -f (Get-Date)
+﻿$ts = "X:\OSDCloud\Logs\Transcript_{0:yyyyMMdd_HHmmss}.txt" -f (Get-Date)
 Start-Transcript -Path $ts -Force
 
 # --- Aya OSDCloud Wrapper using latest release assets ---
@@ -450,11 +450,11 @@ try {
 $sys32 = Join-Path $windows "System32"
 
 if ($manufacturer -match 'Lenovo') {
-    Write-Host "Manufacturer detected: Lenovo � using LenovoDiagnostics.zip"
+    Write-Host "Manufacturer detected: Lenovo — using LenovoDiagnostics.zip"
     $zipName    = "LenovoDiagnostics.zip"
     $extractDir = Join-Path $tempDir "LD"
 } else {
-    Write-Host "Manufacturer '$manufacturer' not Lenovo � using PassMark-BurnInTest.zip"
+    Write-Host "Manufacturer '$manufacturer' not Lenovo — using PassMark-BurnInTest.zip"
     $zipName    = "PassMark-BurnInTest.zip"
     $extractDir = Join-Path $tempDir "HD"
 }
@@ -506,10 +506,126 @@ Write-Host "###############################" -ForegroundColor Cyan
 Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/OSDCloud/main/Scripts/SetupComplete.cmd" `
   -OutFile (Join-Path $setupDir "SetupComplete.cmd")
 
+# 9. Send Teams Notification to OSDCloud Deployments channel 
+function Send-TeamsNotificationViaWorkflow {
+
+    # --- Hardcoded settings ---
+    $flowUrl = 'https://defaultc32ce2354d9a4296a647a9edb2912a.c9.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/528d30b467aa4c65af16e8268cd077a9/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=orn6vz37XIjwkAOqfQgvwjTY3CkYPv1SNL1usPrVecg'
+    $title   = 'OSDCloud Deployment'
+    $message = 'Successfully finished OS Deployment to:'
+
+    # --- Collect facts from the running device ---
+    try {
+        $bios  = Get-CimInstance Win32_BIOS
+        $cs    = Get-CimInstance Win32_ComputerSystem
+        $os    = Get-CimInstance Win32_OperatingSystem
+        $cpu   = ((Get-CimInstance Win32_Processor)[0].Name -split '@')[0].Trim()
+        $mem   = '{0:N0} GB' -f ($cs.TotalPhysicalMemory / 1GB)
+        $build = '{0}.{1}' -f $os.Version, (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name UBR).UBR
+        $drive = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
+        $disk  = if ($drive) { 'C: Total Size: {0:N2} GB' -f ($drive.Size / 1GB) } else { 'N/A' }
+
+        $net = Get-NetIPConfiguration | Where-Object { $_.IPv4Address -and $_.NetAdapter.Status -eq 'Up' } | Select-Object -First 1
+        $adapter = if ($net) { ($net.NetAdapter.InterfaceAlias -replace '\d+', '').Trim() } else { 'N/A' }
+        $mac     = if ($net) { ($net.NetAdapter.MacAddress -replace '-', ':') } else { 'N/A' }
+        $ipv4    = if ($net) { $net.IPv4Address.IPAddress } else { 'N/A' }
+
+        $secondaryModel = $null
+        if ($cs.Manufacturer -eq 'Lenovo') {
+            $secondaryModel = (Get-CimInstance -ClassName Win32_ComputerSystemProduct -Property Version -Verbose:$VerbosePreference).Version
+        }
+        $model = if ($secondaryModel) { "$secondaryModel ($($cs.Model))" } else { $cs.Model }
+
+        try {
+            $region  = Invoke-RestMethod 'https://ipinfo.io/json' -TimeoutSec 5
+            $country = "{0}, {1}, {2}" -f $region.city, $region.region, $region.country
+        } catch { $country = 'Unknown' }
+
+        $facts = @(
+            @{ title='Serial Number:';   value=$bios.SerialNumber }
+            @{ title='Make:';            value=$cs.Manufacturer }
+            @{ title='Model:';           value=$model }
+            @{ title='Computer Name:';   value=$env:COMPUTERNAME }
+            @{ title='OS:';              value=$build }
+            @{ title='CPU:';             value=$cpu }
+            @{ title='Total Memory:';    value=$mem }
+            @{ title='Disk Space:';      value=$disk }
+            @{ title='Network Adapter:'; value=$adapter }
+            @{ title='MAC Address:';     value=$mac }
+            @{ title='IP Address:';      value=$ipv4 }
+            @{ title='Country:';         value=$country }
+            @{ title='Time Stamp:';      value=(Get-Date).ToString('s') }
+        ) | Where-Object { $_.value -and "$($_.value)".Trim() -ne '' }
+
+    } catch {
+        $facts = @(@{ title='Error:'; value='Failed to collect some system info.' })
+    }
+
+    # --- Build rows with two columns (label | value) so each is on one line ---
+    $rows = foreach ($f in $facts) {
+        @{
+            type    = 'ColumnSet'
+            columns = @(
+                @{ type='Column'; width='auto';    items=@(@{ type='TextBlock'; text=$f.title; weight='Bolder'; wrap=$false }) },
+                @{ type='Column'; width='stretch'; items=@(@{ type='TextBlock'; text=$f.value; wrap=$true }) }
+            )
+            spacing = 'Small'
+        }
+    }
+
+    # --- Build Adaptive Card ---
+    $card = [ordered]@{
+        '$schema' = 'http://adaptivecards.io/schemas/adaptive-card.json'
+        type      = 'AdaptiveCard'
+        version   = '1.4'
+        body      = @(
+            @{ type='TextBlock'; text=$title;   weight='Bolder'; size='Medium'; wrap=$true },
+            @{ type='TextBlock'; text=$message; color='Good';    wrap=$true;  spacing='Small' }
+        ) + $rows
+    }
+
+    # --- Payload wrapper your Flow expects (Parse JSON → Post card) ---
+    $payload = @{
+        content = @{
+            title       = $title
+            attachments = @(
+                @{
+                    contentType = 'application/vnd.microsoft.card.adaptive'
+                    content     = $card
+                }
+            )
+        }
+    }
+
+    try {
+        Invoke-RestMethod -Uri $flowUrl -Method POST -ContentType 'application/json' -Body (($payload | ConvertTo-Json -Depth 20)) -TimeoutSec 60 | Out-Null
+        Write-Host "`r`n##############################" -ForegroundColor Cyan
+        Write-Host "###Teams Adaptive Card sent###" -ForegroundColor Cyan
+        Write-Host "##############################" -ForegroundColor Cyan        
+    } catch {
+        Write-Host "Post failed: $($_.Exception.Message)"
+        if ($_.Exception.Response -and $_.Exception.Response.GetResponseStream()) {
+            $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+            Write-Host ($reader.ReadToEnd())
+        }
+    }
+}
+
+Send-TeamsNotificationViaWorkflow
+
+
+
+
+
+
 Stop-Transcript
 Write-Host "`r`n#########################" -ForegroundColor Cyan 
 Write-Host "###Deployment Finished###" -ForegroundColor Cyan
 Write-Host "#########################" -ForegroundColor Cyan
+
+
+
+
 
 Read-Host "`r`nPress Enter to reboot"
 Write-Host "`r`nStaging complete. Rebooting"
