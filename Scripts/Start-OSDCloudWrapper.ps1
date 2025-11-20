@@ -506,7 +506,7 @@ Write-Host "###############################" -ForegroundColor Cyan
 Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/OSDCloud/main/Scripts/SetupComplete.cmd" `
   -OutFile (Join-Path $setupDir "SetupComplete.cmd")
 
-# 9. Sage Dock drivers for Lenovo laptops
+# 9. Stage Dock drivers for Lenovo laptops
 
 # Check manufacturer
 $manufacturer = (Get-CimInstance Win32_ComputerSystem).Manufacturer
@@ -536,6 +536,8 @@ if ($manufacturer -match 'Lenovo') {
 else {
     Write-Host "Non-Lenovo system detected. Skipping dock driver download."
 }
+
+dism /Image:C:\ /Add-Driver /Driver:C:\Drivers\ExtraDrivers /Recurse /LogPath:'C:\Windows\Logs\DISM\LenovoExtraDrivers.log'
 
 
 # 10. Send Teams Notification to OSDCloud Deployments channel 
