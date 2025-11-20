@@ -514,7 +514,7 @@ if ($manufacturer -match 'Lenovo') {
     Write-Host "Detected Lenovo system. Proceeding with Lenovo Dock Driver download..." -ForegroundColor Cyan
 
     # Destination folder
-    $dest = 'C:\Drivers\LenovoDock'
+    $dest = 'C:\Drivers\ExtraDrivers\LenovoDock'
     New-Item -Path $dest -ItemType Directory -Force | Out-Null
 
     # Temp ZIP path
