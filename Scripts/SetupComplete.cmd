@@ -66,6 +66,12 @@ reagentc /enable >>"%Log%" 2>&1
 echo [WinRE] reagentc /info>>"%Log%"
 reagentc /info >>"%Log%" 2>&1
 
+:: --- 5) Add Additional drivers to the Windows image (online) ---
+echo [DISM] Add Extra Drivers >>"%Log%" 
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$cs=Get-CimInstance Win32_ComputerSystem; if ($cs.Manufacturer -match 'Lenovo' -and $cs.PCSystemType -eq 2) { dism /online /Add-Driver /Driver:'C:\Drivers\ExtraDrivers' /Recurse /LogPath:'C:\Windows\Logs\DISM\LenovoExtraDrivers.log' }"
+
+
+
 echo ==== SetupComplete END: %DATE% %TIME% ====>>"%Log%"
 exit /b 0
 
