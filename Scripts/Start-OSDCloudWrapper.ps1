@@ -506,7 +506,39 @@ Write-Host "###############################" -ForegroundColor Cyan
 Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/OSDCloud/main/Scripts/SetupComplete.cmd" `
   -OutFile (Join-Path $setupDir "SetupComplete.cmd")
 
-# 9. Send Teams Notification to OSDCloud Deployments channel 
+# 9. Sage Dock drivers for Lenovo laptops
+
+# Check manufacturer
+$manufacturer = (Get-CimInstance Win32_ComputerSystem).Manufacturer
+if ($manufacturer -match 'Lenovo') {
+    Write-Host "Detected Lenovo system. Proceeding with Lenovo Dock Driver download..." -ForegroundColor Cyan
+
+    # Destination folder
+    $dest = 'C:\Drivers\LenovoDock'
+    New-Item -Path $dest -ItemType Directory -Force | Out-Null
+
+    # Temp ZIP path
+    $tempZip = "$env:TEMP\LenovoDockDrivers.zip"
+
+    # Download Lenovo Dock driver package
+    $zipUrl = 'https://github.com/JustinSparksAya/OSDCloud/releases/download/v1/LenovoDockDrivers.zip'
+    Write-Host "Downloading Lenovo Dock driver package..."
+    Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip -UseBasicParsing
+
+    # Extract to destination
+    Write-Host "Extracting drivers to $dest..."
+    Expand-Archive -Path $tempZip -DestinationPath $dest -Force
+
+    # Cleanup
+    Remove-Item $tempZip -Force
+    Write-Host "Lenovo Dock driver package successfully downloaded and extracted to $dest" -ForegroundColor Cyan
+}
+else {
+    Write-Host "Non-Lenovo system detected. Skipping dock driver download."
+}
+
+
+# 10. Send Teams Notification to OSDCloud Deployments channel 
 function Send-TeamsNotificationViaWorkflow {
     param(
         [bool]$Success = $true,
@@ -721,7 +753,7 @@ function Send-TeamsNotificationViaWorkflow {
 
 Stop-Transcript
 
-# Setup Check log paths
+# 11. Check logs for errors
 $OSDlog = Get-Item -Path $ts -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 $OSDlog = $OSDlog.FullName
 
