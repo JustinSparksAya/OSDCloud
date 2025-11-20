@@ -1,4 +1,4 @@
-$ts = "X:\OSDCloud\Logs\Transcript_{0:yyyyMMdd_HHmmss}.txt" -f (Get-Date)
+$ts = "X:\OSDCloud\Logs\OSDCloud_{0:yyyyMMdd_HHmmss}.log" -f (Get-Date)
 Start-Transcript -Path $ts -Force
 
 # --- Aya OSDCloud Wrapper using latest release assets ---
@@ -508,13 +508,28 @@ Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/OSDCloud
 
 # 9. Send Teams Notification to OSDCloud Deployments channel 
 function Send-TeamsNotificationViaWorkflow {
+    param(
+        [bool]$Success = $true,
+        [string]$ErrorMessage = $null
+    )
 
     # --- Hardcoded settings ---
     $flowUrl = 'https://defaultc32ce2354d9a4296a647a9edb2912a.c9.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/528d30b467aa4c65af16e8268cd077a9/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=orn6vz37XIjwkAOqfQgvwjTY3CkYPv1SNL1usPrVecg'
     $title   = 'OSDCloud Deployment'
-    $message = 'Successfully finished OS Deployment to:'
 
-    # --- Collect facts from the running device ---
+    # --- Message and color selection based on success (char codes only) ---
+    if ($Success) {
+        $checkMark = "$([char]0x2705)"   # U+2705
+        $message   = "$checkMark Deployment completed successfully."
+        $msgColor  = 'Good'
+    } else {
+        $crossMark = "$([char]0x274C)"   # U+274C
+        $message   = "$crossMark Deployment failed or encountered issues!"
+        if ($ErrorMessage) { $message += "`n$ErrorMessage" }
+        $msgColor  = 'Attention'
+    }
+
+    # --- Collect system data ---
     try {
         $bios  = Get-CimInstance Win32_BIOS
         $cs    = Get-CimInstance Win32_ComputerSystem
@@ -525,6 +540,43 @@ function Send-TeamsNotificationViaWorkflow {
         $drive = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
         $disk  = if ($drive) { 'C: Total Size: {0:N2} GB' -f ($drive.Size / 1GB) } else { 'N/A' }
 
+        function Get-BatteryPercent {
+            $ps  = [System.Windows.Forms.SystemInformation]::PowerStatus
+            $pct = [math]::Round($ps.BatteryLifePercent * 100)
+            if ($pct -ge 0) { return $pct }
+            try {
+                $wmi = Get-CimInstance -ClassName Win32_Battery -ErrorAction Stop
+                if ($null -ne $wmi.EstimatedChargeRemaining) { return [int]$wmi.EstimatedChargeRemaining }
+            } catch { }
+            return $null
+        }
+
+        $pct   = Get-BatteryPercent
+        $power = [System.Windows.Forms.SystemInformation]::PowerStatus
+
+        # --- Icons (char codes only; no literal emoji) ---
+        $iconBolt        = "$([char]0x26A1)"                            # U+26A1
+        $iconPlug        = "$([char]0xD83D)$([char]0xDD0C)"             # U+1F50C
+        $iconBattery     = "$([char]0xD83D)$([char]0xDD0B)"             # U+1F50B
+        $iconLowBattery  = "$([char]0xD83E)$([char]0xDEAB)"             # U+1FAAB
+        $iconWarning     = "$([char]0x26A0)$([char]0xFE0F)"             # U+26A0 U+FE0F
+
+        # --- Power status: keep icon in LABEL only; value has no extra bolt ---
+        if ($power.PowerLineStatus -eq [System.Windows.Forms.PowerLineStatus]::Online) {
+            if ($pct -lt 50) {
+                $powerStatus = "$iconPlug$iconLowBattery $pct`%"
+            } else {
+                $powerStatus = "$iconPlug$iconBattery $pct`%"
+            }
+        } else {
+            if ($pct -lt 50) {
+                $powerStatus = "$iconWarning $iconLowBattery $pct`%"
+            } else {
+                $powerStatus = "$iconWarning $iconBattery $pct`%"
+            }
+        }
+
+        # --- Network details ---
         $net = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled=TRUE" |
         ForEach-Object {
             $a = Get-CimInstance Win32_NetworkAdapter -Filter "Index=$($_.Index)"
@@ -545,6 +597,35 @@ function Send-TeamsNotificationViaWorkflow {
         $mac     = if ($net) { ($net.NetAdapter.MacAddress -replace '-', ':') } else { 'N/A' }
         $ipv4    = if ($net) { $net.IPv4Address.IPAddress } else { 'N/A' }
 
+        # --- Connection type and icon (char codes only) ---
+        $iconWifi  = "$([char]0xD83D)$([char]0xDCF6)"                    # U+1F4F6
+        $iconLink  = "$([char]0xD83D)$([char]0xDD17)"                    # U+1F517
+        $iconGlobe = "$([char]0xD83C)$([char]0xDF10)"                    # U+1F310
+
+        if ($adapter -match '(wi[-\s]?fi|wifi|wlan|wireless)') {
+            $connIcon = $iconWifi
+            $connText = 'Wi-Fi'
+        } elseif ($adapter -match '(ethernet|lan)') {
+            $connIcon = $iconLink
+            $connText = 'Ethernet'
+        } else {
+            $connIcon = $iconGlobe
+            $connText = if ($adapter -and $adapter -ne 'N/A') { $adapter } else { 'Unknown' }
+        }
+
+        # --- Icons for labels (char codes only) ---
+        $iconSerial  = "$([char]0xD83D)$([char]0xDCB3)"                  # U+1F4B3
+        $iconMake    = "$([char]0xD83C)$([char]0xDFED)"                  # U+1F3ED
+        $iconModel   = "$([char]0xD83D)$([char]0xDCBB)"                  # U+1F4BB
+        $iconPC      = "$([char]0xD83D)$([char]0xDDA5)"                  # U+1F5A5
+        $iconWin     = "$([char]0xD83E)$([char]0xDE9F)"                  # U+1FA9F
+        $iconCPU     = "$([char]0x2699)$([char]0xFE0F)"                  # U+2699 U+FE0F
+        $iconMemory  = "$([char]0xD83D)$([char]0xDCCA)"                  # U+1F4CA
+        $iconStorage = "$([char]0xD83D)$([char]0xDDC4)"                  # U+1F5C4
+        $iconMac     = "$([char]0xD83D)$([char]0xDD20)"                  # U+1F520
+        $iconIP      = "$([char]0xD83C)$([char]0xDF10)"                  # U+1F310
+        $iconPin     = "$([char]0xD83D)$([char]0xDCCD)"                  # U+1F4CD
+        $iconClock   = "$([char]0xD83D)$([char]0xDD53)"                  # U+1F553
 
         $secondaryModel = $null
         if ($cs.Manufacturer -eq 'Lenovo') {
@@ -557,33 +638,35 @@ function Send-TeamsNotificationViaWorkflow {
             $country = "{0}, {1}, {2}" -f $region.city, $region.region, $region.country
         } catch { $country = 'Unknown' }
 
+        # --- Facts with updated labels/icons (char codes only) ---
         $facts = @(
-            @{ title='Serial Number:';   value=$bios.SerialNumber }
-            @{ title='Make:';            value=$cs.Manufacturer }
-            @{ title='Model:';           value=$model }
-            @{ title='Computer Name:';   value=$env:COMPUTERNAME }
-            @{ title='OS:';              value=$build }
-            @{ title='CPU:';             value=$cpu }
-            @{ title='Total Memory:';    value=$mem }
-            @{ title='Disk Space:';      value=$disk }
-            @{ title='Network Adapter:'; value=$adapter }
-            @{ title='MAC Address:';     value=$mac }
-            @{ title='IP Address:';      value=$ipv4 }
-            @{ title='Country:';         value=$country }
-            @{ title='Time Stamp:';      value=(Get-Date).ToString('s') }
+            @{ title="$iconSerial Serial Number:";      value=$bios.SerialNumber }
+            @{ title="$iconMake Make:";                 value=$cs.Manufacturer }
+            @{ title="$iconModel Model:";               value=$model }
+            @{ title="$iconPC Computer Name:";          value=$env:COMPUTERNAME }
+            @{ title="$iconWin Windows PE Version:";    value=$build }
+            @{ title="$iconCPU CPU:";                   value=$cpu }
+            @{ title="$iconMemory Memory:";             value=$mem }
+            @{ title="$iconStorage Storage Space:";     value=$disk }
+            @{ title="$iconBolt Power Status:";         value=$powerStatus }
+            @{ title="$connIcon Connection Type:";      value=$connText }
+            @{ title="$iconMac MAC Address:";           value=$mac }
+            @{ title="$iconIP IP Address:";             value=$ipv4 }
+            @{ title="$iconPin Location:";              value=$country }
+            @{ title="$iconClock Time Stamp:";          value=(Get-Date).ToString('g') }
         ) | Where-Object { $_.value -and "$($_.value)".Trim() -ne '' }
 
     } catch {
         $facts = @(@{ title='Error:'; value='Failed to collect some system info.' })
     }
 
-    # --- Build rows with two columns (label | value) so each is on one line ---
+    # --- Build rows: RichTextBlock keeps label and value tight on one line ---
     $rows = foreach ($f in $facts) {
         @{
-            type    = 'ColumnSet'
-            columns = @(
-                @{ type='Column'; width='auto';    items=@(@{ type='TextBlock'; text=$f.title; weight='Bolder'; wrap=$false }) },
-                @{ type='Column'; width='stretch'; items=@(@{ type='TextBlock'; text=$f.value; wrap=$true }) }
+            type    = 'RichTextBlock'
+            inlines = @(
+                @{ type='TextRun'; text=$f.title + ' '; weight='Bolder' },
+                @{ type='TextRun'; text=$f.value }
             )
             spacing = 'Small'
         }
@@ -596,7 +679,7 @@ function Send-TeamsNotificationViaWorkflow {
         version   = '1.4'
         body      = @(
             @{ type='TextBlock'; text=$title;   weight='Bolder'; size='Medium'; wrap=$true },
-            @{ type='TextBlock'; text=$message; color='Good';    wrap=$true;  spacing='Small' }
+            @{ type='TextBlock'; text=$message; color=$msgColor; wrap=$true; spacing='Small' }
         ) + $rows
     }
 
@@ -613,36 +696,95 @@ function Send-TeamsNotificationViaWorkflow {
         }
     }
 
+    # --- Send to Teams (UTF-8 safe) ---
     try {
-        Invoke-RestMethod -Uri $flowUrl -Method POST -ContentType 'application/json' -Body (($payload | ConvertTo-Json -Depth 20)) -TimeoutSec 60 | Out-Null
-        Write-Host "`r`n##############################" -ForegroundColor Cyan
-        Write-Host "###Teams Adaptive Card sent###" -ForegroundColor Cyan
-        Write-Host "##############################" -ForegroundColor Cyan        
+        $json      = ($payload | ConvertTo-Json -Depth 20)
+        $utf8NoBOM = New-Object System.Text.UTF8Encoding($false)
+        $bodyBytes = $utf8NoBOM.GetBytes($json)
+
+        Invoke-RestMethod -Uri $flowUrl -Method POST -ContentType 'application/json; charset=utf-8' -Body $bodyBytes -TimeoutSec 60 | Out-Null
+
+        Write-Host "`r`n################################" -ForegroundColor Cyan 
+        Write-Host "### Teams Adaptive Card sent ###" -ForegroundColor Cyan 
+        Write-Host "################################" -ForegroundColor Cyan 
     } catch {
-        Write-Host "Post failed: $($_.Exception.Message)"
+        Write-Host "Post failed: $($_.Exception.Message)" -ForegroundColor Red
         if ($_.Exception.Response -and $_.Exception.Response.GetResponseStream()) {
             $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
-            Write-Host ($reader.ReadToEnd())
+            Write-Host ($reader.ReadToEnd()) -ForegroundColor Red
         }
     }
 }
-
-Send-TeamsNotificationViaWorkflow
-
-
 
 
 
 
 Stop-Transcript
-Write-Host "`r`n#########################" -ForegroundColor Cyan 
-Write-Host "###Deployment Finished###" -ForegroundColor Cyan
-Write-Host "#########################" -ForegroundColor Cyan
 
+# Setup Check log paths
+$OSDlog = Get-Item -Path $ts -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+$OSDlog = $OSDlog.FullName
 
+$logMissing = (-not $OSDLog)
 
+function Find-TriggerLine {
+    param ($lines)
 
+    $skipSection = $false
 
-Read-Host "`r`nPress Enter to reboot"
-Write-Host "`r`nStaging complete. Rebooting"
-Restart-Computer
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $line = $lines[$i]
+
+        # Detect start and end of skip section
+        if ($line -match "Microsoft update catalog drivers") {
+            $skipSection = $true
+            continue
+        }
+        if ($skipSection -and $line -match "Add Windows Driver with Offline Servicing") {
+            $skipSection = $false
+            continue
+        }
+
+        # Skip lines inside the section
+        if ($skipSection) { continue }
+
+        # Detect actual error or terminating lines outside the section
+        if (($line -like "*error*" -and $line -notlike "*erroraction*") -or $line -like "*terminat*") {
+            return $lines[$i]
+        }
+    }
+
+    return $null
+}
+
+$Success = $false
+
+if (!$logMissing) {
+    $logContent = Get-Content -Path $OSDLog -ErrorAction SilentlyContinue
+    $ErrLine = Find-TriggerLine $logContent
+    if ($null -eq $ErrLine) {
+        $Success = $true
+    }
+}
+
+If($Success){
+    Send-TeamsNotificationViaWorkflow -Success $Success
+    Write-Host "`r`n#########################" -ForegroundColor Cyan 
+    Write-Host "###Deployment Finished###" -ForegroundColor Cyan
+    Write-Host "#########################" -ForegroundColor Cyan
+    Copy-Item -Path $OSDlog -Destination "C:\Windows\Temp\" -Force
+    Write-Host "`r`nRestarting in 15 seconds..." -ForegroundColor Green
+    Start-Sleep 15
+    Write-Host "`r`nStaging complete. Restarting..."
+    Restart-Computer
+} else {
+    Send-TeamsNotificationViaWorkflow -Success $Success -ErrorMessage $ErrLine
+    Write-Host "`r`n!!!!!!!!!!!!!!!!!!!!!!!" -ForegroundColor Red
+    Write-Host "!!!Deployment Failed!!!" -ForegroundColor Red
+    Write-Host "!!!!!!!!!!!!!!!!!!!!!!!" -ForegroundColor Red
+    Write-Host "`r`nError line in `'$OSDlog`':" -ForegroundColor Red
+    Write-Host $ErrLine -ForegroundColor Red    
+    Read-Host "`r`nPress Enter to reboot"
+    Restart-Computer
+}
+
