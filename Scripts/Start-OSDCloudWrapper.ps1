@@ -537,7 +537,7 @@ else {
     Write-Host "Non-Lenovo system detected. Skipping dock driver download."
 }
 
-dism /Image:C:\ /Add-Driver /Driver:C:\Drivers\ExtraDrivers /Recurse /LogPath:'C:\Windows\Logs\DISM\LenovoExtraDrivers.log'
+dism /Image:C:\ /Add-Driver /Driver:C:\Drivers\ExtraDrivers /Recurse
 
 
 # 10. Send Teams Notification to OSDCloud Deployments channel 
