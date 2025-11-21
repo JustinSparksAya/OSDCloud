@@ -532,12 +532,12 @@ if ($manufacturer -match 'Lenovo') {
     # Cleanup
     Remove-Item $tempZip -Force
     Write-Host "Lenovo Dock driver package successfully downloaded and extracted to $dest" -ForegroundColor Cyan
+
+    dism /Image:C:\ /Add-Driver /Driver:C:\Drivers\ExtraDrivers /Recurse
 }
 else {
     Write-Host "Non-Lenovo system detected. Skipping dock driver download."
 }
-
-dism /Image:C:\ /Add-Driver /Driver:C:\Drivers\ExtraDrivers /Recurse
 
 
 # 10. Send Teams Notification to OSDCloud Deployments channel 
