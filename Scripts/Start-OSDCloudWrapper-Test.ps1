@@ -488,6 +488,14 @@ Write-Host "###############################" -ForegroundColor Cyan
 Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/OSDCloud/main/Scripts/Activate-WindowsUsignOEMProductKey.ps1" `
     -OutFile (Join-Path $tempDir "Activate-WindowsUsignOEMProductKey.ps1")
 
+Write-Host "`r`n###############################" -ForegroundColor Cyan
+Write-Host "###Staging Display Orientation Landscape Mode Script###" -ForegroundColor Cyan
+Write-Host "###############################" -ForegroundColor Cyan
+
+# 9. Stage Display Orientation Landscape Mode Script
+Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/ChatGPT-Generated-Scripts/main/Set-LandscapeMode.ps1" `
+    -OutFile (Join-Path $tempDir "Set-LandscapeMode.ps1")
+
 Write-Host "`r`n#####################################" -ForegroundColor Cyan
 Write-Host "###Staging WinPE Drivers for WinRE###" -ForegroundColor Cyan
 Write-Host "#####################################" -ForegroundColor Cyan
@@ -506,7 +514,7 @@ Write-Host "###############################" -ForegroundColor Cyan
 Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/OSDCloud/main/Scripts/SetupComplete-Test.cmd" `
   -OutFile (Join-Path $setupDir "SetupComplete.cmd")
 
-# 9. Stage Dock drivers for Lenovo laptops
+# 10. Stage Dock drivers for Lenovo laptops
 
 # Check manufacturer
 $manufacturer = (Get-CimInstance Win32_ComputerSystem).Manufacturer
@@ -540,7 +548,7 @@ else {
 }
 
 
-# 10. Send Teams Notification to OSDCloud Deployments channel 
+# 11. Send Teams Notification to OSDCloud Deployments channel 
 function Send-TeamsNotificationViaWorkflow {
     param(
         [bool]$Success = $true,
@@ -755,7 +763,7 @@ function Send-TeamsNotificationViaWorkflow {
 
 Stop-Transcript
 
-# 11. Check logs for errors
+# 12. Check logs for errors
 $OSDlog = Get-Item -Path $ts -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 $OSDlog = $OSDlog.FullName
 
