@@ -500,10 +500,10 @@ $Log = Join-Path $DestDir 'WinPE-ExportDrivers.log'
 & dism.exe /online /export-driver "/destination:$DestDir" *> $Log
 
 Write-Host "`r`n###############################" -ForegroundColor Cyan
-Write-Host "###Staging SetupComplete.cmd###" -ForegroundColor Cyan
+Write-Host "###Staging SetupComplete-Test.cmd###" -ForegroundColor Cyan
 Write-Host "###############################" -ForegroundColor Cyan
-# 8. Stage SetupComplete script
-Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/OSDCloud/main/Scripts/SetupComplete.cmd" `
+# 8. Stage SetupComplete-Test script
+Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/OSDCloud/main/Scripts/SetupComplete-Test.cmd" `
   -OutFile (Join-Path $setupDir "SetupComplete.cmd")
 
 # 9. Stage Dock drivers for Lenovo laptops
