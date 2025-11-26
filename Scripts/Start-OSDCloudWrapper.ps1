@@ -506,6 +506,13 @@ Write-Host "###############################" -ForegroundColor Cyan
 Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/OSDCloud/main/Scripts/SetupComplete.cmd" `
   -OutFile (Join-Path $setupDir "SetupComplete.cmd")
 
+Write-Host "`r`n###############################" -ForegroundColor Cyan
+Write-Host "###Staging Set-LandscapeMode.ps1###" -ForegroundColor Cyan
+Write-Host "###############################" -ForegroundColor Cyan
+# 8. Stage SetupComplete script
+Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/ChatGPT-Generated-Scripts/main/Set-LandscapeMode.ps1" `
+  -OutFile (Join-Path $tempDir "Set-LandscapeMode.ps1")
+
 # 9. Stage Dock drivers for Lenovo laptops
 
 # Check manufacturer
@@ -821,4 +828,3 @@ If($Success){
     Read-Host "`r`nPress Enter to reboot"
     Restart-Computer
 }
-
