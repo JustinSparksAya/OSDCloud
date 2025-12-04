@@ -90,10 +90,12 @@ If ($onSubnet) {
     Write-Host "##############################" -ForegroundColor Cyan
 
     #Connecting to Network share
+   
+    $User  = 'OSDCloud@corp.ayahealthcare.com'
+    $Share = '\\corp-wdsvm-01\AYA-IT'
+    $Drive = 'Z:'
+        
     if (-not (Test-Path "$Drive\")) {
-        $User  = 'OSDCloud@corp.ayahealthcare.com'
-        $Share = '\\corp-wdsvm-01\AYA-IT'
-        $Drive = 'Z:'
 
         # Replace this value with the Enc output from the helper script
         $Enc   = '76492d1116743f0423413b16050a5345MgB8AFgANQBrAGcAbwBaAHMAUABYAEYAdwBnADEAOABlAEcAbgBaAHEAdwBjAFEAPQA9AHwANQAxAGYAYgA0ADMAOQBlAGUAZgA2AGYAZQA4ADAAMQBmADAANABjADIANwBjADIAMwBkAGUAOAA0ADEAOQAyAGIAMgBkADEAYwBmAGQAZgA0ADEAMAAxAGIANgAwAGUAYQBhADcAMwAyADIAOQBiAGUAMQA5ADgAOAAzADEAMQA='
