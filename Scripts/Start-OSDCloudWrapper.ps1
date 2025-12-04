@@ -12,6 +12,10 @@ $WorkbenchSubnet = '10.40.222.*'
 
 # WinPE: NTP -> Pacific time (DST aware) with debug, no prompts
 
+Write-Host "`r`n##############################" -ForegroundColor Cyan
+Write-Host "### Start Remote Time Sync ###" -ForegroundColor Cyan
+Write-Host "##############################" -ForegroundColor Cyan
+
 $S='pool.ntp.org'
 $B=New-Object byte[] 48; $B[0]=0x1B
 $U=New-Object System.Net.Sockets.UdpClient
@@ -21,28 +25,17 @@ $U.Connect($S,123) | Out-Null
 $EP=New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any,0)
 $R=$U.Receive([ref]$EP); $U.Close()
 
-Write-Host "---- DEBUG: NTP packet ----"
-Write-Host ("Bytes 40..47: " + [BitConverter]::ToString($R[40..47]))
-
 # Parse big endian seconds.fraction
 $sec = (([uint32]$R[40] -shl 24) -bor ([uint32]$R[41] -shl 16) -bor ([uint32]$R[42] -shl 8) -bor [uint32]$R[43])
 $f   = (([uint32]$R[44] -shl 24) -bor ([uint32]$R[45] -shl 16) -bor ([uint32]$R[46] -shl 8) -bor [uint32]$R[47])
 
-# Derive UTC via Unix epoch to avoid WinPE 1900-epoch skew
 $ntpToUnixOffset = 2208988800
 $unixSec = [int64]$sec - $ntpToUnixOffset
 $utc = ([DateTimeOffset]::FromUnixTimeSeconds($unixSec)).UtcDateTime
 $utc = $utc.AddMilliseconds([math]::Round(($f / [math]::Pow(2,32)) * 1000))
 
-Write-Host ("UTC computed:    {0:yyyy-MM-dd HH:mm:ss.fff}Z" -f $utc)
-
-Write-Host "---- DEBUG: System clock before ----"
+# Save original system time
 $before = Get-Date
-Write-Host ("System now:      {0:yyyy-MM-dd HH:mm:ss.fff} (Kind={1})" -f $before, $before.Kind)
-try {
-    $tz = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\TimeZoneInformation' -ErrorAction Stop
-    Write-Host ("Registry Bias:   Bias={0} ActiveTimeBias={1} minutes" -f $tz.Bias, $tz.ActiveTimeBias)
-} catch { Write-Host "No TimeZoneInformation registry values" }
 
 # Pacific DST boundaries in UTC
 $y = $utc.Year
@@ -54,23 +47,30 @@ $dNov = New-Object datetime ($y,11,1,0,0,0,[System.DateTimeKind]::Utc)
 $deltaNov = (7 + [int][DayOfWeek]::Sunday - [int]$dNov.DayOfWeek) % 7
 $firstSunNov = $dNov.AddDays($deltaNov)
 
-$dstStartUtc = New-Object datetime ($secondSunMar.Year,$secondSunMar.Month,$secondSunMar.Day,10,0,0,[System.DateTimeKind]::Utc) # 02:00 local while -8
-$dstEndUtc   = New-Object datetime ($firstSunNov.Year,  $firstSunNov.Month,  $firstSunNov.Day,  9,0,0,[System.DateTimeKind]::Utc)  # 02:00 local while -7
+$dstStartUtc = New-Object datetime ($secondSunMar.Year,$secondSunMar.Month,$secondSunMar.Day,10,0,0,[System.DateTimeKind]::Utc)
+$dstEndUtc   = New-Object datetime ($firstSunNov.Year,  $firstSunNov.Month,  $firstSunNov.Day,  9,0,0,[System.DateTimeKind]::Utc)
 
-if(($utc -ge $dstStartUtc) -and ($utc -lt $dstEndUtc)) { $offsetHours = -7 } else { $offsetHours = -8 }
+if(($utc -ge $dstStartUtc) -and ($utc -lt $dstEndUtc)) {
+    $offsetHours = -7
+} else {
+    $offsetHours = -8
+}
 
 $pacific = $utc.AddHours($offsetHours)
 
-Write-Host "---- DEBUG: Target ----"
-Write-Host ("DST window:      {0:yyyy-MM-dd HH:mm}Z -> {1:yyyy-MM-dd HH:mm}Z" -f $dstStartUtc, $dstEndUtc)
-Write-Host ("Offset hours:    {0}" -f $offsetHours)
-Write-Host ("Setting clock:   {0:yyyy-MM-dd HH:mm:ss}" -f $pacific)
-
+# Set adjusted time
 Set-Date $pacific | Out-Null
 
-Write-Host "---- DEBUG: System clock after ----"
+# Capture new system time
 $after = Get-Date
-Write-Host ("System now:      {0:yyyy-MM-dd HH:mm:ss.fff}" -f $after)
+
+# Compute difference
+$diff = $after - $before
+
+Write-Host "Original Time:   $($before.ToString('yyyy-MM-dd HH:mm:ss.fff'))"
+Write-Host "Adjusted Time:   $($after.ToString('yyyy-MM-dd HH:mm:ss.fff'))"
+Write-Host "Difference:      $($diff.ToString())"
+
 
 ##^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ## End Date Time Sync Section
@@ -90,49 +90,54 @@ If ($onSubnet) {
     Write-Host "##############################" -ForegroundColor Cyan
 
     #Connecting to Network share
-    $User  = 'SysMDT'
-    $Share = '\\corp-wds-02\DeploymentShare2'
-    $Drive = 'Z:'
-    $Enc   = '76492d1116743f0423413b16050a5345MgB8AG4AQgBqAFAAYQBDAGoANwBwAG8AMgA2AGEAMQA4AE0AUABBAEkAaABDAEEAPQA9AHwAMAA2ADkANQAyAGYAMQBjADgANQBiADQAOQAzADMAYwA0AGQAMQBkAGUAMABkAGEAZAAxADIANgBhADEANQBhADMANQAxAGIAZQAwAGQAMQBjADcANAA5ADIAYwA3ADEANgAxAGUANQBlAGQANwBhAGEAMQA3AGUAZQAzADIAZgA='
-    [byte[]]$Key = @(17,208,162,81,196,107,230,240,247,48,225,30,25,178,96,8,134,161,94,80,51,221,61,197,76,180,28,105,205,232,241,148)
-    # ======================
+    if (-not (Test-Path "$Drive\")) {
+        $User  = 'OSDCloud@corp.ayahealthcare.com'
+        $Share = '\\corp-wdsvm-01\AYA-IT'
+        $Drive = 'Z:'
 
-    # Recreate the SecureString in memory
-    $Sec = ConvertTo-SecureString -String $Enc -Key $Key
+        # Replace this value with the Enc output from the helper script
+        $Enc   = '76492d1116743f0423413b16050a5345MgB8AFgANQBrAGcAbwBaAHMAUABYAEYAdwBnADEAOABlAEcAbgBaAHEAdwBjAFEAPQA9AHwANQAxAGYAYgA0ADMAOQBlAGUAZgA2AGYAZQA4ADAAMQBmADAANABjADIANwBjADIAMwBkAGUAOAA0ADEAOQAyAGIAMgBkADEAYwBmAGQAZgA0ADEAMAAxAGIANgAwAGUAYQBhADcAMwAyADIAOQBiAGUAMQA5ADgAOAAzADEAMQA='
 
-    # Extract a plain string for the native tool call
-    $BSTR  = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Sec)
-    $Plain = [Runtime.InteropServices.Marshal]::PtrToStringUni($BSTR)
+        [byte[]]$Key = @(17,208,162,81,196,107,230,240,247,48,225,30,25,178,96,8,134,161,94,80,51,221,61,197,76,180,28,105,205,232,241,148)
+        # ======================
 
-    # Map with net use
-    $rc = Start-Process -FilePath net.exe `
-        -ArgumentList @('use', $Drive, $Share, "/user:$User", $Plain, '/persistent:no') `
-        -NoNewWindow -Wait -PassThru
+        # Recreate the SecureString in memory
+        $Sec = ConvertTo-SecureString -String $Enc -Key $Key
 
-    # Clean up sensitive material in memory
-    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTR)
-    $Plain = $null
-    [System.GC]::Collect()
-    [System.GC]::WaitForPendingFinalizers()
+        # Extract a plain string for the native tool call
+        $BSTR  = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Sec)
+        $Plain = [Runtime.InteropServices.Marshal]::PtrToStringUni($BSTR)
 
-    if ($rc.ExitCode -eq 0) {
-        Write-Host "Mapped $Drive to $Share as $User."
-    } else {
-        Write-Host "Mapping failed. Exit code: $($rc.ExitCode)"
-        exit 1
-    }
+        # Map with net use
+        $rc = Start-Process -FilePath net.exe `
+            -ArgumentList @('use', $Drive, $Share, "/user:$User", $Plain, '/persistent:no') `
+            -NoNewWindow -Wait -PassThru
 
-    # Optional verification
-    if (Test-Path "$Drive\") {
-        Write-Host "$Drive is accessible."
-    } else {
-        Write-Host "$Drive is not accessible after mapping."
-        exit 1
+        # Clean up sensitive material in memory
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTR)
+        $Plain = $null
+        [System.GC]::Collect()
+        [System.GC]::WaitForPendingFinalizers()
+
+        if ($rc.ExitCode -eq 0) {
+            Write-Host "Mapped $Drive to $Share as $User."
+        } else {
+            Write-Host "Mapping failed. Exit code: $($rc.ExitCode)"
+            exit 1
+        }
+
+        # Optional verification
+        if (Test-Path "$Drive\") {
+            Write-Host "$Drive is accessible."
+        } else {
+            Write-Host "$Drive is not accessible after mapping."
+            exit 1
+        }
     }
 
     # Import the certificate
     Write-Host "Importing Certificate"
-    $CertPath = 'Z:\Scripts\OSDCloud_Certificate\osdcloud-20251103.pfx'
+    $CertPath = 'Z:\Certs\osdcloud-20251103.pfx'
     $cert  = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($CertPath,"CertPassword")
     $store = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root','LocalMachine')
     $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
@@ -506,9 +511,9 @@ Write-Host "###############################" -ForegroundColor Cyan
 Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/OSDCloud/main/Scripts/SetupComplete.cmd" `
   -OutFile (Join-Path $setupDir "SetupComplete.cmd")
 
-Write-Host "`r`n###############################" -ForegroundColor Cyan
+Write-Host "`r`n###################################" -ForegroundColor Cyan
 Write-Host "###Staging Set-LandscapeMode.ps1###" -ForegroundColor Cyan
-Write-Host "###############################" -ForegroundColor Cyan
+Write-Host "###################################" -ForegroundColor Cyan
 # 8. Stage SetupComplete script
 Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/ChatGPT-Generated-Scripts/main/Set-LandscapeMode.ps1" `
   -OutFile (Join-Path $tempDir "Set-LandscapeMode.ps1")
