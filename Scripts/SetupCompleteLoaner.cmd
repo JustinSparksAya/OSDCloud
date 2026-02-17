@@ -13,28 +13,24 @@ set "DRV=C:\Windows\Temp\wpedrivers"
 :: Timestamp
 echo ==== SetupComplete START: %DATE% %TIME% ====>>"%Log%"
 
+msg * "The Setup is continuing in the background. Please wait..."
+
 :: --- 1) activation step ---
 echo [Activate] Running Activate-WindowsUsignOEMProductKey.ps1>>"%Log%"
 powershell.exe -ExecutionPolicy Bypass -File "C:\Windows\Temp\Activate-WindowsUsignOEMProductKey.ps1" >> "%LogDir%\Activate-WindowsUsignOEMProductKey.log" 2>&1
 echo [Activate] Done.>>"%Log%"
 
-:: --- 2) Staging Windows Update Loop script's First boot ---
-echo [WULoop] Running Activate-WindowsUsignOEMProductKey.ps1>>"%Log%"
-%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SystemRoot%\Setup\Scripts\WU-AyaLoanerLoop.ps1"
- >> "%LogDir%\StagingWU-AyaLoanerLoop.log" 2>&1
-echo [WULopp] Done.>>"%Log%"
-
-:: --- 3) landscape mode step ---
+:: --- 2) landscape mode step ---
 echo [Activate] Running Set-LandscapeMode.ps1>>"%Log%"
 powershell.exe -ExecutionPolicy Bypass -File "C:\Windows\Temp\Set-LandscapeMode.ps1" >> "%LogDir%\Set-LandscapeMode.log" 2>&1
 echo [Activate] Done.>>"%Log%"
 
-:: --- 4) Prepare WinRE injection (disable WinRE; OK if already disabled) ---
+:: --- 3) Prepare WinRE injection (disable WinRE; OK if already disabled) ---
 echo [WinRE] reagentc /disable>>"%Log%"
 reagentc /disable >>"%Log%" 2>&1
 
 
-:: --- 5) Inject drivers from %DRV% into WinRE.wim (if folder exists) ---
+:: --- 4) Inject drivers from %DRV% into WinRE.wim (if folder exists) ---
 if exist "%DRV%\" (
   echo [WinRE] Injecting drivers from "%DRV%">>"%Log%"
 
@@ -65,8 +61,6 @@ if exist "%DRV%\" (
   >>"%Log%" echo [WinRE] Driver folder not found "%DRV%\" ; skipping injection
 )
 
-
-
 :: --- 5) Re-register and enable WinRE (online) ---
 echo [WinRE] reagentc /setreimage /path C:\Windows\System32\Recovery>>"%Log%"
 reagentc /setreimage /path C:\Windows\System32\Recovery >>"%Log%" 2>&1
@@ -76,6 +70,11 @@ reagentc /enable >>"%Log%" 2>&1
 
 echo [WinRE] reagentc /info>>"%Log%"
 reagentc /info >>"%Log%" 2>&1
+
+:: --- 6) Staging Windows Update Loop script's First boot ---
+echo [WULoop] Staging Windows Update Loop script's First boot>>"%Log%"
+%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SystemRoot%\Setup\Scripts\WU-AyaLoanerLoop.ps1" >> "%LogDir%\StagingWU-AyaLoanerLoop.log" 2>&1
+echo [WULopp] Done.>>"%Log%"
 
 
 echo ==== SetupComplete END: %DATE% %TIME% ====>>"%Log%"
