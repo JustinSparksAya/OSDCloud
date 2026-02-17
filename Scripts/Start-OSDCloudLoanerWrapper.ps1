@@ -464,8 +464,15 @@ Write-Host "`r`n###############################" -ForegroundColor Cyan
 Write-Host "###Staging SetupComplete.cmd###" -ForegroundColor Cyan
 Write-Host "###############################" -ForegroundColor Cyan
 # 8. Stage SetupComplete script
-Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/OSDCloud/main/Scripts/SetupComplete.cmd" `
+Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/OSDCloud/main/Scripts/SetupCompleteLoaner.cmd" `
   -OutFile (Join-Path $setupDir "SetupComplete.cmd")
+
+Write-Host "`r`n###############################" -ForegroundColor Cyan
+Write-Host "###Staging WU-AyaLoanerLoop.ps1###" -ForegroundColor Cyan
+Write-Host "###############################" -ForegroundColor Cyan
+# 8. Stage WU-AyaLoanerLoop script
+Invoke-Download -Uri "https://raw.githubusercontent.com/JustinSparksAya/OSDCloud/main/Scripts/WU-AyaLoanerLoop.ps1" `
+  -OutFile (Join-Path $setupDir "WU-AyaLoanerLoop.ps1")
 
 Write-Host "`r`n###################################" -ForegroundColor Cyan
 Write-Host "###Staging Set-LandscapeMode.ps1###" -ForegroundColor Cyan
