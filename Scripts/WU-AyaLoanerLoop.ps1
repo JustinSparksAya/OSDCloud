@@ -534,5 +534,7 @@ try {
     }
 }
 finally {
+    msg * "All done. The system is ready to deploy."
     try { $mutex.ReleaseMutex() } catch {}
 }
+
