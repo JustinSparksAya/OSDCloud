@@ -457,6 +457,7 @@ try {
                 Write-Log "No updates remain AND no reboot required. FINISH."
                 Cleanup-KeepLogs -TaskName $TaskName -StatePath $StatePath -StagedScript $StagedScript -LogPath $LogPath
                 Write-Log "DONE. (Logs preserved)"
+                msg * "All Updates are done.`r`nThe system is ready for deployment." 
                 exit 0
             } else {
                 Write-Log "No updates remain but reboot is pending. Restarting..."
@@ -502,4 +503,5 @@ try {
 finally {
     try { $mutex.ReleaseMutex() } catch {}
 }
+
 ``
