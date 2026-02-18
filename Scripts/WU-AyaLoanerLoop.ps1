@@ -1,22 +1,17 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-  SetupComplete (SYSTEM) stages + registers a logon-triggered task for local user AyaLoaner.
+  SetupComplete (SYSTEM) stages + registers an interactive logon task (runs as INTERACTIVE user).
   At AyaLoaner logon, runs Microsoft Update loop with visible progress (software + drivers).
   Reboots until fully done, then disables AutoAdminLogon, removes the task, and deletes staged script/state.
   Keeps logs in ProgramData.
 
-.DESCRIPTION
-  - No account creation
-  - No autologon enable/renew/credential handling
-  - Only disables autologon at completion
-  - Installs everything offered by Microsoft Update to the agent (IsInstalled=0 AND IsHidden=0)
-  - Keeps logs
+.KEY FIX
+  Avoids "No mapping between account names and security IDs was done" by NOT binding the task
+  to AyaLoaner during SetupComplete. Instead uses INTERACTIVE group SID S-1-5-4. [3](https://www.briantist.com/errors/scheduled-task-powershell-0xfffd0000/)[1](https://stackoverflow.com/questions/58346274/register-scheduledtask-no-mapping-betwen-account-names-and-security-ids-was-do)
 
 .NOTES
-  Fixes:
-  - ScheduledTasks LogonType must be Interactive (not InteractiveToken) [1](https://lazyadmin.nl/it/error-0xfffd0000-after-running-powershell-scheduled-task/)[2](https://superuser.com/questions/1908236/powershell-script-fails-via-task-scheduler-system)
-  - quser marks current session with leading ">" (e.g., >ayaloaner), detection trims it.
+  ScheduledTasks LogonType valid values include Interactive; we use Group principal here instead. [4](https://lazyadmin.nl/it/error-0xfffd0000-after-running-powershell-scheduled-task/)
 #>
 
 [CmdletBinding()]
@@ -64,7 +59,6 @@ function Save-State($state) {
     try { $state | ConvertTo-Json -Depth 6 | Set-Content -Path $StatePath -Encoding UTF8 } catch {}
 }
 
-# Prevent overlapping runs
 function Acquire-Mutex {
     param([string]$Name = "Global\WU_AyaLoanerLoop_Mutex")
     $created = $false
@@ -77,42 +71,40 @@ function Acquire-Mutex {
 }
 
 # ----------------------------
-# Robust "is user logged on" (handles quser '>' marker)
+# Current interactive user (robust; handles quser '>' marker)
 # ----------------------------
-function Test-UserLoggedOn {
-    param([Parameter(Mandatory)][string]$UserName)
-
+function Get-CurrentConsoleUser {
     $lines = & quser 2>$null
-    if (-not $lines) { return $false }
+    if (-not $lines) { return $null }
 
     foreach ($line in $lines) {
-        # Skip header
         if ($line -match '^\s*USERNAME\s+') { continue }
 
-        # Normalize whitespace and split
         $norm = ($line -replace '\s+', ' ').Trim()
         if (-not $norm) { continue }
 
-        $firstToken = $norm.Split(' ')[0]
-        if (-not $firstToken) { continue }
+        $tok = $norm.Split(' ')[0]
+        if (-not $tok) { continue }
 
-        # quser marks the active session with leading ">"
-        $firstToken = $firstToken.TrimStart('>')
+        # active session marker
+        $tok = $tok.TrimStart('>')
 
-        if ($firstToken -ieq $UserName) { return $true }
+        # We only care about the console session typically
+        if ($norm -match '\sconsole\s') {
+            return $tok
+        }
     }
 
-    return $false
+    return $null
 }
 
 # ----------------------------
-# Force-enable Microsoft Update ("Other Microsoft products") - best effort
+# Microsoft Update enable (best effort)
 # ----------------------------
 function Enable-MicrosoftUpdateOtherProducts {
     $muServiceId = "7971f918-a847-4430-9279-4a52d1efe18d"
     Write-Log "Ensuring Microsoft Update (Other Microsoft products) is enabled..."
 
-    # Ensure MU service is registered
     try {
         $sm = New-Object -ComObject "Microsoft.Update.ServiceManager"
         $sm.ClientApplicationID = "WU-AyaLoanerLoop"
@@ -122,7 +114,6 @@ function Enable-MicrosoftUpdateOtherProducts {
         Write-Log "Failed to ensure Microsoft Update service (continuing): $($_.Exception.Message)" "WARN"
     }
 
-    # Some builds don't expose AutoUpdate.Settings.ServiceID; attempt only if present
     try {
         $au = New-Object -ComObject "Microsoft.Update.AutoUpdate"
         $settings = $au.Settings
@@ -157,45 +148,48 @@ function Disable-AutoLogon {
 }
 
 # ----------------------------
-# Scheduled Task: Logon-triggered, visible console window
-# LogonType must be Interactive (valid ScheduledTasks enum) [1](https://lazyadmin.nl/it/error-0xfffd0000-after-running-powershell-scheduled-task/)[2](https://superuser.com/questions/1908236/powershell-script-fails-via-task-scheduler-system)
+# Scheduled Task registration (KEY FIX: run as INTERACTIVE group to avoid SID mapping failure)
+# INTERACTIVE group SID is S-1-5-4. [3](https://www.briantist.com/errors/scheduled-task-powershell-0xfffd0000/)[1](https://stackoverflow.com/questions/58346274/register-scheduledtask-no-mapping-betwen-account-names-and-security-ids-was-do)
 # ----------------------------
 function Register-InteractiveLogonTask {
     param(
         [Parameter(Mandatory)][string]$TaskName,
-        [Parameter(Mandatory)][string]$UserName,
         [Parameter(Mandatory)][string]$ScriptPath,
         [Parameter(Mandatory)][string]$WorkingDir,
         [Parameter(Mandatory)][int]$PollSeconds
     )
 
-    $fullUser = "$env:COMPUTERNAME\$UserName"
-    $psExe    = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+    $psExe = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 
-    # Launch a visible console window using cmd.exe start
+    # Visible console window
     $innerArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`" -Run -UserName `"$UserName`" -TaskName `"$TaskName`" -StagingDir `"$WorkingDir`" -PollSeconds $PollSeconds"
     $cmdArgs   = "/c start `"`" /D `"$WorkingDir`" `"$psExe`" $innerArgs"
 
+    # Prefer ScheduledTasks module
     try {
         Import-Module ScheduledTasks -ErrorAction Stop
 
-        $principal = New-ScheduledTaskPrincipal -UserId $fullUser -LogonType Interactive -RunLevel Highest
+        # Principal: INTERACTIVE group (no username binding => no SID mapping at stage time)
+        $principal = New-ScheduledTaskPrincipal -GroupId "S-1-5-4" -RunLevel Highest
+
+        # Trigger: any logon
+        $trigger   = New-ScheduledTaskTrigger -AtLogOn
+
         $action    = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\cmd.exe" -Argument $cmdArgs -WorkingDirectory $WorkingDir
-        $trigger   = New-ScheduledTaskTrigger -AtLogOn -User $fullUser
         $settings  = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 12)
 
         try { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue | Out-Null } catch {}
         Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
 
-        Write-Log "Registered logon task via ScheduledTasks: $TaskName (User: $fullUser)"
+        Write-Log "Registered logon task via ScheduledTasks: $TaskName (Principal: INTERACTIVE S-1-5-4)"
         return
     } catch {
         Write-Log "ScheduledTasks registration failed, falling back to COM API. $($_.Exception.Message)" "WARN"
     }
 
-    # COM fallback
-    $TASK_LOGON_INTERACTIVE_TOKEN = 3
-    $TASK_RUNLEVEL_HIGHEST        = 1
+    # COM fallback: Group principal
+    $TASK_LOGON_GROUP      = 4
+    $TASK_RUNLEVEL_HIGHEST = 1
 
     $svc = New-Object -ComObject "Schedule.Service"
     $svc.Connect()
@@ -208,34 +202,23 @@ function Register-InteractiveLogonTask {
     $task.Settings.StartWhenAvailable = $true
     $task.Settings.ExecutionTimeLimit = "PT12H"
 
-    $task.Principal.UserId    = $fullUser
-    $task.Principal.LogonType = $TASK_LOGON_INTERACTIVE_TOKEN
+    # Group principal (INTERACTIVE)
+    $task.Principal.GroupId  = "S-1-5-4"
+    $task.Principal.LogonType = $TASK_LOGON_GROUP
     $task.Principal.RunLevel  = $TASK_RUNLEVEL_HIGHEST
 
+    # Trigger: logon (any user)
     $trigger = $task.Triggers.Create(9) # TASK_TRIGGER_LOGON
-    $trigger.UserId = $fullUser
+    # no UserId set => any logon
 
-    $act = $task.Actions.Create(0) # TASK_ACTION_EXEC
+    # Action
+    $act = $task.Actions.Create(0)
     $act.Path = "$env:SystemRoot\System32\cmd.exe"
     $act.Arguments = $cmdArgs
     $act.WorkingDirectory = $WorkingDir
 
-    $folder.RegisterTaskDefinition($TaskName, $task, 6, $null, $null, $TASK_LOGON_INTERACTIVE_TOKEN, $null) | Out-Null
-    Write-Log "Registered logon task via COM: $TaskName (User: $fullUser)"
-}
-
-function Try-RunTaskNow {
-    param([string]$TaskName)
-    try {
-        Import-Module ScheduledTasks -ErrorAction Stop
-        Start-ScheduledTask -TaskName $TaskName
-        Write-Log "Triggered task immediately (Start-ScheduledTask): $TaskName"
-        return
-    } catch {}
-    try {
-        & "$env:SystemRoot\System32\schtasks.exe" /Run /TN $TaskName | Out-Null
-        Write-Log "Triggered task immediately (schtasks /Run): $TaskName"
-    } catch {}
+    $folder.RegisterTaskDefinition($TaskName, $task, 6, $null, $null, $TASK_LOGON_GROUP, $null) | Out-Null
+    Write-Log "Registered logon task via COM: $TaskName (Principal: INTERACTIVE S-1-5-4)"
 }
 
 function Remove-TaskRobust {
@@ -276,7 +259,7 @@ function Test-PendingReboot {
 }
 
 # ----------------------------
-# Windows Update COM loop (includes drivers)
+# Windows Update COM loop
 # ----------------------------
 function New-WUObjects {
     $session = New-Object -ComObject "Microsoft.Update.Session"
@@ -303,20 +286,10 @@ function Get-UpdateSummary($u) {
     $type=""
     try { $type = $u.Type } catch {}
 
-    $drv=""
-    try {
-        $parts=@()
-        foreach($p in "DriverManufacturer","DriverModel","DriverClass","DriverVerDate"){
-            try { $v=$u.$p; if($v){ $parts += "$p=$v" } } catch {}
-        }
-        if($parts.Count -gt 0){ $drv = " | " + ($parts -join " ; ") }
-    } catch {}
-
-    return "$($u.Title)$kbPart Type=$type$drv"
+    return "$($u.Title)$kbPart Type=$type"
 }
 
 function Search-Updates($searcher) {
-    # "Everything offered by MS" = all applicable, not installed, not hidden updates offered to the agent
     $criteria = "IsInstalled=0 and IsHidden=0"
     Write-Log "Searching for updates (criteria: $criteria) ..."
     $result = $searcher.Search($criteria)
@@ -398,12 +371,7 @@ function Install-One($session,$u,$n,$total,$poll) {
     return [pscustomobject]@{ ResultCode=$rc; RebootRequired=$reboot }
 }
 
-# ----------------------------
-# Cleanup (keep logs + staging folder, remove only task/script/state)
-# ----------------------------
 function Cleanup-KeepLogs {
-    param([string]$TaskName,[string]$StatePath,[string]$StagedScript,[string]$LogPath)
-
     Write-Log "Cleanup: removing scheduled task and disabling autologon (keeping logs)."
     Remove-TaskRobust -TaskName $TaskName
     Disable-AutoLogon
@@ -422,7 +390,7 @@ $mutex = Acquire-Mutex
 try {
     $state = Load-State
 
-    # Ensure Windows Update service running
+    # Ensure WU service running
     try {
         $svc = Get-Service -Name wuauserv -ErrorAction Stop
         if ($svc.Status -ne "Running") {
@@ -436,10 +404,9 @@ try {
     Enable-MicrosoftUpdateOtherProducts
 
     if (-not $Run) {
-        # ---------------- STAGE MODE (SetupComplete / SYSTEM) ----------------
-        Write-Log "STAGE MODE: staging script + registering logon task for $UserName..."
+        # STAGE MODE (SetupComplete)
+        Write-Log "STAGE MODE: staging script + registering INTERACTIVE logon task (no user binding)..."
 
-        # Resolve current script path in SetupComplete context
         $src = $PSCommandPath
         if (-not $src) { $src = $MyInvocation.MyCommand.Path }
         if (-not $src -or -not (Test-Path $src)) { throw "Cannot resolve current script path for staging." }
@@ -447,27 +414,28 @@ try {
         Copy-Item -Path $src -Destination $StagedScript -Force
         Write-Log "Staged script to: $StagedScript"
 
-        Register-InteractiveLogonTask -TaskName $TaskName -UserName $UserName -ScriptPath $StagedScript -WorkingDir $StagingDir -PollSeconds $PollSeconds
+        Register-InteractiveLogonTask -TaskName $TaskName -ScriptPath $StagedScript -WorkingDir $StagingDir -PollSeconds $PollSeconds
 
         $state.StageComplete = $true
         $state.LastAction = "StagedAndTaskRegistered"
         Save-State $state
 
-        # If AyaLoaner already logged on (manual execution), trigger immediately
-        if (Test-UserLoggedOn -UserName $UserName) {
-            Write-Log "$UserName appears logged in already. Triggering task now..."
-            Try-RunTaskNow -TaskName $TaskName
-        } else {
-            Write-Log "$UserName not logged in yet. Task will run at logon."
-        }
-
-        Write-Log "Stage complete."
+        Write-Log "Stage complete. Task will run at next interactive logon."
         exit 0
     }
 
-    # ---------------- RUN MODE (AyaLoaner interactive session) ----------------
-    Write-Log "RUN MODE: update loop starting (interactive, visible progress)."
+    # RUN MODE (interactive)
+    $current = Get-CurrentConsoleUser
+    Write-Log "RUN MODE: started under console user: $current"
+
+    # Gate: only proceed when AyaLoaner is the logged-on console user
+    if (-not $current -or ($current -ine $UserName)) {
+        Write-Log "Not running under $UserName console session; exiting. (This is expected until AyaLoaner logs on.)" "WARN"
+        exit 0
+    }
+
     Write-Log "Log file: $LogPath"
+    Write-Log "Beginning update loop for user: $UserName"
 
     $pass = 0
     while ($true) {
@@ -489,7 +457,7 @@ try {
         if ($total -eq 0) {
             if (-not (Test-PendingReboot)) {
                 Write-Log "No updates remain AND no reboot required. FINISH."
-                Cleanup-KeepLogs -TaskName $TaskName -StatePath $StatePath -StagedScript $StagedScript -LogPath $LogPath
+                Cleanup-KeepLogs
                 Write-Log "DONE. (Logs preserved)"
                 exit 0
             } else {
@@ -512,10 +480,8 @@ try {
             $n = $i + 1
 
             Write-Log ("Processing [{0}/{1}] {2}" -f $n, $total, (Get-UpdateSummary $u))
-
             Download-One $session $u $n $total $PollSeconds
             $r = Install-One  $session $u $n $total $PollSeconds
-
             if ($r.RebootRequired) { $needsReboot = $true }
 
             $overallDone = [math]::Round(($n/$total)*100,1)
@@ -537,4 +503,3 @@ finally {
     msg * "All done. The system is ready to deploy."
     try { $mutex.ReleaseMutex() } catch {}
 }
-
