@@ -56,7 +56,7 @@
 			<AutoLogon>
 				<Username>AyaLoaner</Username>
 				<Enabled>true</Enabled>
-				<LogonCount>1</LogonCount>
+				<LogonCount>5</LogonCount>
 				<Password>
 					<Value>VwBGAEQATABvAGEAbgBlAHIAMgAwADIANgBQAGEAcwBzAHcAbwByAGQA</Value>
 					<PlainText>false</PlainText>
@@ -101,3 +101,4 @@
 
 	<cpi:offlineImage cpi:source="catalog:C:\install_Windows 11 Pro.clg" xmlns:cpi="urn:schemas-microsoft-com:cpi" />
 </unattend>
+
