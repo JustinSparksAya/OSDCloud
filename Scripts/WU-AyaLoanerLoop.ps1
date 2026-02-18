@@ -377,7 +377,6 @@ function Cleanup-KeepLogs {
     Disable-AutoLogon
 
     try { Remove-Item -Path $StatePath -Force -ErrorAction SilentlyContinue } catch {}
-
     Write-Log "Scheduling staged script deletion (log preserved at: $LogPath)"
     $cmd = "timeout /t 3 >nul & del /f /q `"$StagedScript`""
     Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList "/c", $cmd -WindowStyle Hidden
@@ -457,6 +456,7 @@ try {
         if ($total -eq 0) {
             if (-not (Test-PendingReboot)) {
                 Write-Log "No updates remain AND no reboot required. FINISH."
+                msg * "All done. The system is ready to deploy."
                 Cleanup-KeepLogs
                 Write-Log "DONE. (Logs preserved)"
                 exit 0
@@ -499,7 +499,6 @@ try {
         Start-Sleep 2
     }
 }
-finally {
-    msg * "All done. The system is ready to deploy."
+finally {    
     try { $mutex.ReleaseMutex() } catch {}
 }
