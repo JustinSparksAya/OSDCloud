@@ -13,24 +13,37 @@ set "DRV=C:\Windows\Temp\wpedrivers"
 :: Timestamp
 echo ==== SetupComplete START: %DATE% %TIME% ====>>"%Log%"
 
-msg * "The Setup is continuing in the background. Please wait..."
+:: --- 1) Power settings: High performance + no display/sleep on AC ---
+echo [PowerCFG] Power settings: High performance + no display/sleep on AC>>"%Log%"
+:: Switch to High performance (if present). If not available (some OEM images), this will harmlessly fail.
+powercfg /S SCHEME_MIN
 
-:: --- 1) activation step ---
+:: Disable display timeout when plugged in (AC)
+powercfg /CHANGE monitor-timeout-ac 0
+
+:: Disable sleep/standby timeout when plugged in (AC)
+powercfg /CHANGE standby-timeout-ac 0
+
+:: (Optional) Disable hibernate timeout when plugged in (AC)
+powercfg /CHANGE hibernate-timeout-ac 0
+echo [PowerCFG] Done.>>"%Log%"
+
+:: --- 2) activation step ---
 echo [Activate] Running Activate-WindowsUsignOEMProductKey.ps1>>"%Log%"
 powershell.exe -ExecutionPolicy Bypass -File "C:\Windows\Temp\Activate-WindowsUsignOEMProductKey.ps1" >> "%LogDir%\Activate-WindowsUsignOEMProductKey.log" 2>&1
 echo [Activate] Done.>>"%Log%"
 
-:: --- 2) landscape mode step ---
+:: --- 3) landscape mode step ---
 echo [Activate] Running Set-LandscapeMode.ps1>>"%Log%"
 powershell.exe -ExecutionPolicy Bypass -File "C:\Windows\Temp\Set-LandscapeMode.ps1" >> "%LogDir%\Set-LandscapeMode.log" 2>&1
 echo [Activate] Done.>>"%Log%"
 
-:: --- 3) Prepare WinRE injection (disable WinRE; OK if already disabled) ---
+:: --- 4) Prepare WinRE injection (disable WinRE; OK if already disabled) ---
 echo [WinRE] reagentc /disable>>"%Log%"
 reagentc /disable >>"%Log%" 2>&1
 
 
-:: --- 4) Inject drivers from %DRV% into WinRE.wim (if folder exists) ---
+:: --- 5) Inject drivers from %DRV% into WinRE.wim (if folder exists) ---
 if exist "%DRV%\" (
   echo [WinRE] Injecting drivers from "%DRV%">>"%Log%"
 
@@ -41,6 +54,8 @@ if exist "%DRV%\" (
   echo [WinRE] Mounting "%WIM%">>"%Log%"
   dism /mount-image /imagefile:"%WIM%" /index:1 /mountdir:"%MNT%" >>"%InjectLog%" 2>&1
   if errorlevel 1 goto :MountFail
+
+  msg * "The Setup is continuing in the background. Please wait..."
 
   echo [WinRE] DISM /add-driver from "%DRV%" /recurse>>"%Log%"
   dism /image:"%MNT%" /add-driver /driver:"%DRV%" /recurse >>"%InjectLog%" 2>&1
@@ -61,7 +76,7 @@ if exist "%DRV%\" (
   >>"%Log%" echo [WinRE] Driver folder not found "%DRV%\" ; skipping injection
 )
 
-:: --- 5) Re-register and enable WinRE (online) ---
+:: --- 6) Re-register and enable WinRE (online) ---
 echo [WinRE] reagentc /setreimage /path C:\Windows\System32\Recovery>>"%Log%"
 reagentc /setreimage /path C:\Windows\System32\Recovery >>"%Log%" 2>&1
 
@@ -71,7 +86,7 @@ reagentc /enable >>"%Log%" 2>&1
 echo [WinRE] reagentc /info>>"%Log%"
 reagentc /info >>"%Log%" 2>&1
 
-:: --- 6) Staging Windows Update Loop script's First boot ---
+:: --- 7) Staging Windows Update Loop script's First boot ---
 echo [WULoop] Staging Windows Update Loop script's First boot>>"%Log%"
 %SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SystemRoot%\Setup\Scripts\WU-AyaLoanerLoop.ps1" >> "%LogDir%\StagingWU-AyaLoanerLoop.log" 2>&1
 echo [WULopp] Done.>>"%Log%"
