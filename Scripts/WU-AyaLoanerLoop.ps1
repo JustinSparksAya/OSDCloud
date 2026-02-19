@@ -635,7 +635,7 @@ try {
         $total = @($updates).Count
 
         if ($total -eq 0) {
-            if (-not (Test-PendingReboot)) {
+            if (-not (Test-PendingReboot) -or ($pass -ge 6)) {
                 Write-Log "No updates remain AND no reboot required. FINISH."
                 msg * "All done. The system is ready to deploy." /time:9999999
                 Cleanup-KeepLogs
@@ -683,4 +683,5 @@ try {
 finally {    
     try { $mutex.ReleaseMutex() } catch {}
 }
+
 
