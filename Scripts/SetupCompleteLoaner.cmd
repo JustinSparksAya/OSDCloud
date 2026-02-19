@@ -55,8 +55,6 @@ if exist "%DRV%\" (
   dism /mount-image /imagefile:"%WIM%" /index:1 /mountdir:"%MNT%" >>"%InjectLog%" 2>&1
   if errorlevel 1 goto :MountFail
 
-  msg * "The Setup is continuing in the background. Please wait..."
-
   echo [WinRE] DISM /add-driver from "%DRV%" /recurse>>"%Log%"
   dism /image:"%MNT%" /add-driver /driver:"%DRV%" /recurse >>"%InjectLog%" 2>&1
   set "EC=!ERRORLEVEL!"
