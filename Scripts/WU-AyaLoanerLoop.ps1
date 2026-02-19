@@ -5,13 +5,6 @@
   At AyaLoaner logon, runs Microsoft Update loop with visible progress (software + drivers).
   Reboots until fully done, then disables AutoAdminLogon, removes the task, and deletes staged script/state.
   Keeps logs in ProgramData.
-
-.KEY FIX
-  Avoids "No mapping between account names and security IDs was done" by NOT binding the task
-  to AyaLoaner during SetupComplete. Instead uses INTERACTIVE group SID S-1-5-4. [3](https://www.briantist.com/errors/scheduled-task-powershell-0xfffd0000/)[1](https://stackoverflow.com/questions/58346274/register-scheduledtask-no-mapping-betwen-account-names-and-security-ids-was-do)
-
-.NOTES
-  ScheduledTasks LogonType valid values include Interactive; we use Group principal here instead. [4](https://lazyadmin.nl/it/error-0xfffd0000-after-running-powershell-scheduled-task/)
 #>
 
 [CmdletBinding()]
@@ -47,7 +40,12 @@ function Write-Log {
 
 function Load-State {
     if (Test-Path $StatePath) {
-        try { return (Get-Content $StatePath -Raw | ConvertFrom-Json) } catch {}
+        try {
+            return (Get-Content $StatePath -Raw | ConvertFrom-Json)
+        } catch {
+            # CHANGED: log parse failure so you can see if the file is corrupt
+            Write-Log "State file exists but could not be parsed. Resetting state. Error: $($_.Exception.Message)" "WARN"
+        }
     }
     return [pscustomobject]@{
         StageComplete = $false
@@ -55,8 +53,17 @@ function Load-State {
         LastAction    = ""
     }
 }
+	 
 function Save-State($state) {
-    try { $state | ConvertTo-Json -Depth 6 | Set-Content -Path $StatePath -Encoding UTF8 } catch {}
+    # CHANGED: atomic write to avoid truncated JSON if reboot happens mid write
+    try {
+        $tmp = "$StatePath.tmp"
+        $json = ($state | ConvertTo-Json -Depth 6)
+        Set-Content -Path $tmp -Value $json -Encoding UTF8 -Force
+        Move-Item -Path $tmp -Destination $StatePath -Force
+    } catch {
+        Write-Log "Failed to save state (continuing): $($_.Exception.Message)" "WARN"
+    }
 }
 
 function Acquire-Mutex {
@@ -442,13 +449,14 @@ function Ensure-ComputerNameNoReboot {
 
 function Install-TeamViewerHost {
     if (-not (Test-Path "C:\Program Files\TeamViewer\TeamViewer.exe")) {
+        Write-Log "Installing Teamviewer Host from Winget..."
         $TVcmd="install Teamviewer.Teamviewer.Host -s winget --accept-source-agreements --accept-package-agreements -h"
         $TVProc= Start-Process winget -ArgumentList $TVcmd -NoNewWindow -PassThru -Wait
         Write-Log "TeamViewer Host Winget install complete (exit code $($TVProc.ExitCode))."
-        return
     }else {
         Write-Log "TeamViewer Host is already installed."
     }
+    Return
 }
 
 function Invoke-TeamViewerAssignment {
@@ -458,58 +466,77 @@ function Invoke-TeamViewerAssignment {
         throw "TeamViewer.exe not found at expected path: $TeamViewerExe"
     }
 
-    $assignmentName = 'Aya - MDM (Default)'
-    $assignmentID = '0001CoABChAX-lbQxD8R7qytiEFOIK1KEigIACAAAgAJABSqiBRKbHQ-wRU1F9pGHO7J1VR52ckJ_WIsx5FWjJ_PGkAa3kkthbKy5IqjzSa1nhuP9KU2iJgHsqJxUnPwHHi-nkosOzxCctuqarDVSqwUCTUcwMbc-_8PW1838rMciJMXIAEQsO-OjAs='
-
-    # Use the effective computer name at runtime (post-rename, post-reboot).
+    $managementId = $null
+    $regPath = 'HKLM:\SOFTWARE\TeamViewer\DeviceManagementV2'
     $tvAlias = "AyaLoaner ($env:COMPUTERNAME)"
-    $registrationSucceeded = $false
-
-    for ($iCount = 1; $iCount -le 10; $iCount++) {
-        $managementId = $null
-
-        $regPath = 'HKLM:\SOFTWARE\TeamViewer\DeviceManagementV2'
-        if (Test-Path -LiteralPath $regPath) {
-            try {
-                $managementId = (Get-ItemProperty -LiteralPath $regPath -ErrorAction SilentlyContinue).'ManagementId'
-            } catch {
-                # Keep null, continue retrying
-                $managementId = $null
-            }
-        } else {
-            # Do NOT throw. It may not exist yet while TV is still initializing.
-            Write-Log "[$iCount] TeamViewer management key not present yet: [$regPath]. Will retry."
-        }
-
-        if ($managementId) {
-            $registrationSucceeded = $true
-            Write-Log "[$iCount] TeamViewer registration confirmed. ManagementId present. [$tvAlias][$assignmentName]"
-            break
-        }
-
-        if ($iCount -ge 10) {
-            throw "TeamViewer registration aborted after $iCount attempts. ManagementId never appeared. [$tvAlias][$assignmentName]"
-        }
-
-        Write-Log "[$iCount] Attempting TeamViewer assignment. [$tvAlias][$assignmentName]"
+    $assignmentName = "Aya -MDM (Default)"
+    $assignmentID = '0001CoABChAX-lbQxD8R7qytiEFOIK1KEigIACAAAgAJABSqiBRKbHQ-wRU1F9pGHO7J1VR52ckJ_WIsx5FWjJ_PGkAa3kkthbKy5IqjzSa1nhuP9KU2iJgHsqJxUnPwHHi-nkosOzxCctuqarDVSqwUCTUcwMbc-_8PW1838rMciJMXIAEQsO-OjAs='
+    
+    if (Test-Path -LiteralPath $regPath) {
         try {
-            if (-not (Get-Process -Name 'teamviewer' -ErrorAction SilentlyContinue)) {
-                Start-Process -FilePath $TeamViewerExe | Out-Null
-                Start-Sleep -Seconds 5
+            $managementId = (Get-ItemProperty -LiteralPath $regPath -ErrorAction SilentlyContinue).'ManagementId'
+        } catch {
+            # Keep null, continue retrying
+            $managementId = $null
+        }
+    } 
+
+    if ($managementId) {
+        $registrationSucceeded = $true
+        Write-Log "TeamViewer registration confirmed. ManagementId present. [$tvAlias][$assignmentName]"
+        Return
+    } else {
+        # Use the effective computer name at runtime (post-rename, post-reboot).
+        Write-Log "Waiting 15 seconds for TeamViewer to initialize"
+        Start-Sleep -Seconds 15
+        $registrationSucceeded = $false
+
+        for ($iCount = 1; $iCount -le 10; $iCount++) {
+            $managementId = $null
+
+            $regPath = 'HKLM:\SOFTWARE\TeamViewer\DeviceManagementV2'
+            if (Test-Path -LiteralPath $regPath) {
+                try {
+                    $managementId = (Get-ItemProperty -LiteralPath $regPath -ErrorAction SilentlyContinue).'ManagementId'
+                } catch {
+                    # Keep null, continue retrying
+                    $managementId = $null
+                }
+            } else {
+                # Do NOT throw. It may not exist yet while TV is still initializing.
+                Write-Log "[$iCount] TeamViewer management key not present yet: [$regPath]. Will retry."
             }
 
-            $p = Start-Process -FilePath $TeamViewerExe -ArgumentList "assignment --id $assignmentID --device-alias=`"$tvAlias`" --retries=5 --timeout=120" -Wait -PassThru
-            Write-Log "[$iCount] Attempted TeamViewer assignment finished. ExitCode=$($p.ExitCode). [$tvAlias][$assignmentName]"
-        } catch {
-            Write-Log "[$iCount] Attempted TeamViewer assignment failed: $($_.Exception.Message)"
+            if ($managementId) {
+                $registrationSucceeded = $true
+                Write-Log "[$iCount] TeamViewer registration confirmed. ManagementId present. [$tvAlias][$assignmentName]"
+                break
+            }
+
+            if ($iCount -ge 10) {
+                throw "TeamViewer registration aborted after $iCount attempts. ManagementId never appeared. [$tvAlias][$assignmentName]"
+            }
+
+            Write-Log "[$iCount] Attempting TeamViewer assignment. [$tvAlias][$assignmentName]"
+            try {
+                if (-not (Get-Process -Name 'teamviewer' -ErrorAction SilentlyContinue)) {
+                    Start-Process -FilePath $TeamViewerExe | Out-Null
+                    Start-Sleep -Seconds 5
+                }
+
+                $p = Start-Process -FilePath $TeamViewerExe -ArgumentList "assignment --id $assignmentID --device-alias=`"$tvAlias`" --retries=5 --timeout=120" -Wait -PassThru
+                Write-Log "[$iCount] Attempted TeamViewer assignment finished. ExitCode=$($p.ExitCode). [$tvAlias][$assignmentName]"
+            } catch {
+                Write-Log "[$iCount] Attempted TeamViewer assignment failed: $($_.Exception.Message)"
+            }
+
+            Write-Log "[$iCount] Checking registration in 30 seconds."
+            Start-Sleep -Seconds 30
         }
 
-        Write-Log "[$iCount] Checking registration in 30 seconds."
-        Start-Sleep -Seconds 30
-    }
-
-    if (-not $registrationSucceeded) {
-        throw "Failed to register TeamViewer after retries. [$tvAlias][$assignmentName]"
+        if (-not $registrationSucceeded) {
+            throw "Failed to register TeamViewer after retries. [$tvAlias][$assignmentName]"
+        }
     }
 }
 
@@ -522,6 +549,10 @@ function Invoke-TeamViewerAssignment {
 $mutex = Acquire-Mutex
 try {
     $state = Load-State
+
+    # CHANGED: show current state at start (helps confirm PassCount is persisting)
+    Write-Log ("Loaded state: StageComplete={0}, PassCount={1}, LastAction={2}" -f $state.StageComplete, $state.PassCount, $state.LastAction)
+
     # Install TVHost only after the renamed computer name is actually in effect.
     # The first boot may request a rename without rebooting, so the effective name
     # might still be the original name in this same session.
@@ -532,10 +563,7 @@ try {
         $desiredName = Get-DesiredComputerName
         Ensure-ComputerNameNoReboot -DesiredName $desiredName
     } else {
-        Write-Log "Installing Teamviewer Host from Winget..."
         Install-TeamViewerHost
-        Write-Log "Waiting 15 seconds for TeamViewer to initialize"
-        Start-Sleep -Seconds 15
         Invoke-TeamViewerAssignment
     }    
 
@@ -586,7 +614,10 @@ try {
     Write-Log "Log file: $LogPath"
     Write-Log "Beginning update loop for user: $UserName"
 
+	# CHANGED: initialize pass from persisted state
     $pass = 0
+    try { $pass = [int]$state.PassCount } catch { $pass = 0 }
+
     while ($true) {
         $pass++
         $state.PassCount = $pass
