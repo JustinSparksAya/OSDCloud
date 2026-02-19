@@ -382,12 +382,162 @@ function Cleanup-KeepLogs {
     Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList "/c", $cmd -WindowStyle Hidden
 }
 
+function Get-SanitizedSerialNumber {
+    try {
+        $sn = (Get-CimInstance -ClassName Win32_BIOS -ErrorAction Stop).SerialNumber
+        $sn = [string]$sn
+        if ([string]::IsNullOrWhiteSpace($sn)) { throw "SerialNumber was blank." }
+        # Keep only letters and digits to avoid invalid computer name chars
+        $sn = ($sn.ToUpper() -replace '[^A-Z0-9]', '')
+        if ([string]::IsNullOrWhiteSpace($sn)) { throw "SerialNumber became blank after sanitization." }
+        return $sn
+    } catch {
+        throw "Failed to read serial number from Win32_BIOS: $($_.Exception.Message)"
+    }
+}
+function Get-DesiredComputerName {
+    # Requirement: FFD-<serial>, truncated to 12 chars max total, no reboot
+    $prefix = 'WFD-'
+    $maxLen = 12
+    $serial = Get-SanitizedSerialNumber
+    $serialMax = $maxLen - $prefix.Length
+    if ($serialMax -lt 1) { throw "Invalid name constraints: prefix length exceeds max length." }
+
+    $serialPart = if ($serial.Length -gt $serialMax) { $serial.Substring(0, $serialMax) } else { $serial }
+    $name = ($prefix + $serialPart)
+
+    # Final safety: enforce max length and valid chars
+    $name = ($name.ToUpper() -replace '[^A-Z0-9\-]', '')
+    if ($name.Length -gt $maxLen) { $name = $name.Substring(0, $maxLen) }
+    if ([string]::IsNullOrWhiteSpace($name)) { throw "Desired computer name computed as blank." }
+
+    return $name
+}
+function Ensure-ComputerNameNoReboot {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$DesiredName
+    )
+
+    $current = [string]$env:COMPUTERNAME
+    $DesiredName = $DesiredName.ToUpper()
+
+    if ($current.ToUpper() -eq $DesiredName) {
+        Write-Log "Computer name already set to '$DesiredName'. No rename needed."
+        $script:EffectiveComputerName = $DesiredName
+        return
+    }
+
+    Write-Log "Renaming computer from '$current' to '$DesiredName' (no reboot requested)."
+    try {
+        Rename-Computer -NewName $DesiredName -Force -ErrorAction Stop | Out-Null
+        # Rename-Computer without -Restart will not reboot; name takes effect after the next reboot.
+        $script:EffectiveComputerName = $DesiredName
+        Write-Log "Rename-Computer succeeded. Effective name for this run will be treated as '$DesiredName'."
+    } catch {
+        throw "Rename-Computer failed: $($_.Exception.Message)"
+    }
+}
+
+function Install-TeamViewerHost {
+    if (-not (Test-Path "C:\Program Files\TeamViewer\TeamViewer.exe")) {
+        $TVcmd="install Teamviewer.Teamviewer.Host -s winget --accept-source-agreements --accept-package-agreements -h"
+        $TVProc= Start-Process winget -ArgumentList $TVcmd -NoNewWindow -PassThru -Wait
+        Write-Log "TeamViewer Host Winget install complete (exit code $($TVProc.ExitCode))."
+        return
+    }else {
+        Write-Log "TeamViewer Host is already installed."
+    }
+}
+
+function Invoke-TeamViewerAssignment {
+    # Embedded and hardened version of TeamViewerHostFFUPosttInstallScript.ps1
+    $TeamViewerExe = Join-Path $env:ProgramFiles 'TeamViewer\TeamViewer.exe'
+    if (-not (Test-Path -LiteralPath $TeamViewerExe)) {
+        throw "TeamViewer.exe not found at expected path: $TeamViewerExe"
+    }
+
+    $assignmentName = 'Aya - MDM (Default)'
+    $assignmentID = '0001CoABChAX-lbQxD8R7qytiEFOIK1KEigIACAAAgAJABSqiBRKbHQ-wRU1F9pGHO7J1VR52ckJ_WIsx5FWjJ_PGkAa3kkthbKy5IqjzSa1nhuP9KU2iJgHsqJxUnPwHHi-nkosOzxCctuqarDVSqwUCTUcwMbc-_8PW1838rMciJMXIAEQsO-OjAs='
+
+    # Use the effective computer name at runtime (post-rename, post-reboot).
+    $tvAlias = "AyaLoaner ($env:COMPUTERNAME)"
+    $registrationSucceeded = $false
+
+    for ($iCount = 1; $iCount -le 10; $iCount++) {
+        $managementId = $null
+
+        $regPath = 'HKLM:\SOFTWARE\TeamViewer\DeviceManagementV2'
+        if (Test-Path -LiteralPath $regPath) {
+            try {
+                $managementId = (Get-ItemProperty -LiteralPath $regPath -ErrorAction SilentlyContinue).'ManagementId'
+            } catch {
+                # Keep null, continue retrying
+                $managementId = $null
+            }
+        } else {
+            # Do NOT throw. It may not exist yet while TV is still initializing.
+            Write-Log "[$iCount] TeamViewer management key not present yet: [$regPath]. Will retry."
+        }
+
+        if ($managementId) {
+            $registrationSucceeded = $true
+            Write-Log "[$iCount] TeamViewer registration confirmed. ManagementId present. [$tvAlias][$assignmentName]"
+            break
+        }
+
+        if ($iCount -ge 10) {
+            throw "TeamViewer registration aborted after $iCount attempts. ManagementId never appeared. [$tvAlias][$assignmentName]"
+        }
+
+        Write-Log "[$iCount] Attempting TeamViewer assignment. [$tvAlias][$assignmentName]"
+        try {
+            if (-not (Get-Process -Name 'teamviewer' -ErrorAction SilentlyContinue)) {
+                Start-Process -FilePath $TeamViewerExe | Out-Null
+                Start-Sleep -Seconds 5
+            }
+
+            $p = Start-Process -FilePath $TeamViewerExe -ArgumentList "assignment --id $assignmentID --device-alias=`"$tvAlias`" --retries=5 --timeout=120" -Wait -PassThru
+            Write-Log "[$iCount] Attempted TeamViewer assignment finished. ExitCode=$($p.ExitCode). [$tvAlias][$assignmentName]"
+        } catch {
+            Write-Log "[$iCount] Attempted TeamViewer assignment failed: $($_.Exception.Message)"
+        }
+
+        Write-Log "[$iCount] Checking registration in 30 seconds."
+        Start-Sleep -Seconds 30
+    }
+
+    if (-not $registrationSucceeded) {
+        throw "Failed to register TeamViewer after retries. [$tvAlias][$assignmentName]"
+    }
+}
+
+
+
+
 # ----------------------------
 # MAIN
 # ----------------------------
 $mutex = Acquire-Mutex
 try {
     $state = Load-State
+    # Install TVHost only after the renamed computer name is actually in effect.
+    # The first boot may request a rename without rebooting, so the effective name
+    # might still be the original name in this same session.
+    if ($env:COMPUTERNAME -notmatch '^WFD-') {
+        msg * "Finishing up the final deployment steps. Please wait..."
+        Write-Log "TVHost Installation deferred: effective computer name '$($env:COMPUTERNAME)' does not start with 'WFD-'."
+        # Ensure the computer is named FFD-<serial> (12 chars max). No reboot is performed here.
+        $desiredName = Get-DesiredComputerName
+        Ensure-ComputerNameNoReboot -DesiredName $desiredName
+    } else {
+        Write-Log "Installing Teamviewer Host from Winget..."
+        Install-TeamViewerHost
+        Write-Log "Waiting 15 seconds for TeamViewer to initialize"
+        Start-Sleep -Seconds 15
+        Invoke-TeamViewerAssignment
+    }    
 
     # Ensure WU service running
     try {
