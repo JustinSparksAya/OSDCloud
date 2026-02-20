@@ -557,7 +557,7 @@ try {
     # The first boot may request a rename without rebooting, so the effective name
     # might still be the original name in this same session.
     if ($env:COMPUTERNAME -notmatch '^WFD-') {
-        msg * "Finishing up the final deployment steps. Please wait..." /time:9999999
+        msg * /TIME:9999999 "Finishing up the final deployment steps. Please wait..." 
         Write-Log "TVHost Installation deferred: effective computer name '$($env:COMPUTERNAME)' does not start with 'WFD-'."
         # Ensure the computer is named FFD-<serial> (12 chars max). No reboot is performed here.
         $desiredName = Get-DesiredComputerName
@@ -637,7 +637,7 @@ try {
         if ($total -eq 0 -or $pass -ge 6 ) {
             if (-not (Test-PendingReboot)) {
                 Write-Log "No updates remain AND no reboot required. FINISH."
-                msg * "All done. The system is ready to deploy." /time:9999999
+                msg * /TIME:9999999 "All done. The system is ready to deploy."
                 Cleanup-KeepLogs
                 Write-Log "DONE. (Logs preserved)"
                 exit 0
@@ -683,6 +683,7 @@ try {
 finally {    
     try { $mutex.ReleaseMutex() } catch {}
 }
+
 
 
 
