@@ -540,6 +540,21 @@ function Invoke-TeamViewerAssignment {
     }
 }
 
+function Install-GoogleChromeEnterprise {
+    [CmdletBinding()]
+    param()
+
+    $Url     = 'https://dl.google.com/chrome/install/GoogleChromeStandaloneEnterprise64.msi'
+    $MsiPath = Join-Path $env:TEMP 'GoogleChromeStandaloneEnterprise64.msi'
+
+    # Download MSI
+    Invoke-WebRequest -Uri $Url -OutFile $MsiPath
+
+    # Silent install
+    Start-Process -FilePath "msiexec.exe" `
+        -ArgumentList "/i `"$MsiPath`" /qn /norestart" `
+        -Wait
+}
 
 
 
@@ -565,6 +580,7 @@ try {
     } else {
         Install-TeamViewerHost
         Invoke-TeamViewerAssignment
+		Install-GoogleChromeEnterprise
     }    
 
     # Ensure WU service running
@@ -683,6 +699,7 @@ try {
 finally {    
     try { $mutex.ReleaseMutex() } catch {}
 }
+
 
 
 
