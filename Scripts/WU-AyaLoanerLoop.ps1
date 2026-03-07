@@ -549,21 +549,44 @@ function Install-GoogleChromeEnterprise {
 
     Write-Log "Starting Google Chrome Enterprise installation."
 
+    # Check if Chrome is already installed
+    $chrome = $null
+    $uninstallPaths = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+
+    foreach ($path in $uninstallPaths) {
+        $chrome = Get-ItemProperty -Path $path -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -eq 'Google Chrome' } |
+            Select-Object -First 1
+        if ($chrome) { break }
+    }
+
+    if ($chrome -and $chrome.DisplayVersion) {
+        Write-Log "Google Chrome is already installed. Version: $($chrome.DisplayVersion). Skipping install."
+        return
+    }
+
     # Disable progress bar for faster download
     $PreviousProgressPreference = $ProgressPreference
     $ProgressPreference = 'SilentlyContinue'
 
     try {
-        Write-Log "Downloading Chrome MSI from $Url to $MsiPath"
+        Write-Log "Chrome not detected. Downloading MSI from $Url to $MsiPath"
         Invoke-WebRequest -Uri $Url -OutFile $MsiPath
 
         Write-Log "Download completed. Starting silent installation."
-
-        Start-Process -FilePath "msiexec.exe" `
+        $proc = Start-Process -FilePath "msiexec.exe" `
             -ArgumentList "/i `"$MsiPath`" /qn /norestart" `
-            -Wait
+            -Wait -PassThru
 
-        Write-Log "Google Chrome Enterprise installation completed."
+        Write-Log "msiexec exited with code: $($proc.ExitCode)"
+        if ($proc.ExitCode -eq 0) {
+            Write-Log "Google Chrome Enterprise installation completed successfully."
+        } else {
+            Write-Log "Google Chrome Enterprise installation failed. Exit code: $($proc.ExitCode)"
+        }
     }
     finally {
         # Restore original progress preference
@@ -714,6 +737,7 @@ try {
 finally {    
     try { $mutex.ReleaseMutex() } catch {}
 }
+
 
 
 
