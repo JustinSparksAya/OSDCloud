@@ -547,13 +547,28 @@ function Install-GoogleChromeEnterprise {
     $Url     = 'https://dl.google.com/chrome/install/GoogleChromeStandaloneEnterprise64.msi'
     $MsiPath = Join-Path $env:TEMP 'GoogleChromeStandaloneEnterprise64.msi'
 
-    # Download MSI
-    Invoke-WebRequest -Uri $Url -OutFile $MsiPath
+    Write-Log "Starting Google Chrome Enterprise installation."
 
-    # Silent install
-    Start-Process -FilePath "msiexec.exe" `
-        -ArgumentList "/i `"$MsiPath`" /qn /norestart" `
-        -Wait
+    # Disable progress bar for faster download
+    $PreviousProgressPreference = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'
+
+    try {
+        Write-Log "Downloading Chrome MSI from $Url to $MsiPath"
+        Invoke-WebRequest -Uri $Url -OutFile $MsiPath
+
+        Write-Log "Download completed. Starting silent installation."
+
+        Start-Process -FilePath "msiexec.exe" `
+            -ArgumentList "/i `"$MsiPath`" /qn /norestart" `
+            -Wait
+
+        Write-Log "Google Chrome Enterprise installation completed."
+    }
+    finally {
+        # Restore original progress preference
+        $ProgressPreference = $PreviousProgressPreference
+    }
 }
 
 
@@ -699,6 +714,7 @@ try {
 finally {    
     try { $mutex.ReleaseMutex() } catch {}
 }
+
 
 
 
