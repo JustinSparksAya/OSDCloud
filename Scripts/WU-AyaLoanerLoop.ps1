@@ -550,18 +550,22 @@ function Install-GoogleChromeEnterprise {
     Write-Log "Starting Google Chrome Enterprise installation."
 
     # Check if Chrome is already installed
-    $chrome = $null
-    $uninstallPaths = @(
-        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
-        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
-    )
-
-    foreach ($path in $uninstallPaths) {
-        $chrome = Get-ItemProperty -Path $path -ErrorAction SilentlyContinue |
-            Where-Object { $_.DisplayName -eq 'Google Chrome' } |
-            Select-Object -First 1
-        if ($chrome) { break }
-    }
+	$chrome = $null
+	$uninstallPaths = @(
+	    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+	    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+	)
+	
+	foreach ($path in $uninstallPaths) {
+	    $chrome = Get-ItemProperty -Path $path -ErrorAction SilentlyContinue |
+	        Where-Object {
+	            $p = $_.PSObject.Properties['DisplayName']
+	            $p -and $p.Value -eq 'Google Chrome'
+	        } |
+	        Select-Object -First 1
+	
+	    if ($chrome) { break }
+	}
 
     if ($chrome -and $chrome.DisplayVersion) {
         Write-Log "Google Chrome is already installed. Version: $($chrome.DisplayVersion). Skipping install."
@@ -737,6 +741,7 @@ try {
 finally {    
     try { $mutex.ReleaseMutex() } catch {}
 }
+
 
 
 
