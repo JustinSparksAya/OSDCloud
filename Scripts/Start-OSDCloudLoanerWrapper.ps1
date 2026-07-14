@@ -750,6 +750,50 @@ function Send-TeamsNotificationViaWorkflow {
 
 
 
+# 10.5 Verify UEFI boot files landed on the EFI System Partition; self-heal if not.
+#       On fast NVMe, bcdboot inside Start-OSDCloud can reach the ESP before it is
+#       ready and fail with "BfspCopyFile ... 0x3" (path not found). Its internal
+#       retry usually lands, but verify explicitly and re-run bcdboot against the
+#       ESP so a genuine miss becomes a reported failure instead of a dead device.
+if ($osDrive) {
+    $esp = $null
+    try {
+        $osDisk = (Get-Partition -DriveLetter $osDrive.TrimEnd(':')).DiskNumber
+        $esp = Get-Partition | Where-Object { $_.Type -eq 'System' -and $_.DiskNumber -eq $osDisk } | Select-Object -First 1
+    } catch {}
+    if (-not $esp) { $esp = Get-Partition | Where-Object Type -eq 'System' | Select-Object -First 1 }
+
+    if (-not $esp) {
+        $DeployErrors.Add("No EFI System Partition found to verify boot files.")
+    } else {
+        $espLetter = $esp.DriveLetter
+        if (-not $espLetter) {
+            try {
+                Add-PartitionAccessPath -DiskNumber $esp.DiskNumber -PartitionNumber $esp.PartitionNumber -AssignDriveLetter -ErrorAction Stop
+                $espLetter = (Get-Partition -DiskNumber $esp.DiskNumber -PartitionNumber $esp.PartitionNumber).DriveLetter
+            } catch {}
+        }
+
+        if (-not $espLetter) {
+            $DeployErrors.Add("Could not access the EFI System Partition to verify boot files.")
+        } else {
+            $bootMgr = "$($espLetter):\EFI\Microsoft\Boot\bootmgfw.efi"
+            $bcdFile = "$($espLetter):\EFI\Microsoft\Boot\BCD"
+            if ((Test-Path $bootMgr) -and (Test-Path $bcdFile)) {
+                Write-Host "Boot files verified on ESP ($($espLetter):)." -ForegroundColor Green
+            } else {
+                Write-Host "Boot files missing on ESP ($($espLetter):). Running bcdboot to repair..." -ForegroundColor Yellow
+                & "$osDrive\Windows\System32\bcdboot.exe" "$osDrive\Windows" /s "$($espLetter):" /f UEFI /c /v | Out-Host
+                if ((Test-Path $bootMgr) -and (Test-Path $bcdFile)) {
+                    Write-Host "Boot files present after bcdboot repair." -ForegroundColor Green
+                } else {
+                    $DeployErrors.Add("Boot files missing after bcdboot repair on ESP $($espLetter): (bootmgfw.efi/BCD not found).")
+                }
+            }
+        }
+    }
+}
+
 Stop-Transcript
 
 # 11. Determine success from real deployment signals, not transcript text.
