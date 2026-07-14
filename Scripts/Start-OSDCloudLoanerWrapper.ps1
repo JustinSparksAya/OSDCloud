@@ -1,6 +1,11 @@
 $ts = "X:\OSDCloud\Logs\OSDCloud_{0:yyyyMMdd_HHmmss}.log" -f (Get-Date)
 Start-Transcript -Path $ts -Force
 
+# Collects real deployment/staging failures. Success is gated on this list plus the
+# OS actually being applied, NOT on scanning the transcript for the word "error"
+# (OSDCloud writes benign error/TerminatingError lines that produced false failures).
+$DeployErrors = [System.Collections.Generic.List[string]]::new()
+
 # --- Aya OSDCloud Wrapper using latest release assets ---
 Write-Host "Aya OSDCloud start"
 
@@ -381,7 +386,11 @@ Invoke-Expression (Invoke-RestMethod 'https://sandbox.osdcloud.com')
 $ProgressPreference = 'SilentlyContinue'
 
 # 3. Apply OS
-Start-OSDCloud -OSBuild "25H2" -OSEdition "Pro" -OSLanguage "en-us" -OSLicense "Retail" -SkipAutopilot -ZTI
+try {
+    Start-OSDCloud -OSBuild "25H2" -OSEdition "Pro" -OSLanguage "en-us" -OSLicense "Retail" -SkipAutopilot -ZTI
+} catch {
+    $DeployErrors.Add("Start-OSDCloud failed: $($_.Exception.Message)")
+}
 
 # 4. Locate applied Windows and prep folders
 function Find-WindowsDrive {
@@ -401,7 +410,10 @@ do {
   Start-Sleep 2
 } while ((Get-Date) -lt $deadline)
 
-if (-not $osDrive) { throw "Couldn't locate the applied Windows drive." }
+if (-not $osDrive) { $DeployErrors.Add("Couldn't locate the applied Windows drive after Start-OSDCloud.") }
+
+# Everything below needs the applied OS drive; skip staging entirely if it's missing.
+if ($osDrive) {
 
 $windows  = Join-Path $osDrive "Windows"
 $panther  = Join-Path $windows "Panther"
@@ -430,7 +442,9 @@ function Invoke-Download {
                 Write-Host "Download failed. Retry $i of $Retries in $DelaySec sec"
                 Start-Sleep -Seconds $DelaySec
             } else {
-                throw "Failed to download $Uri after $Retries attempts"
+                $DeployErrors.Add("Failed to download $Uri after $Retries attempts")
+                Write-Host "Failed to download $Uri after $Retries attempts" -ForegroundColor Yellow
+                return
             }
         }
     }
@@ -498,11 +512,15 @@ if ($manufacturer -match 'Lenovo') {
     # Download Lenovo Dock driver package
     $zipUrl = 'https://github.com/JustinSparksAya/OSDCloud/releases/download/v1/LenovoDockDrivers.zip'
     Write-Host "Downloading Lenovo Dock driver package..."
-    Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip -UseBasicParsing
+    try {
+        Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip -UseBasicParsing
 
-    # Extract to destination
-    Write-Host "Extracting drivers to $dest..."
-    Expand-Archive -Path $tempZip -DestinationPath $dest -Force
+        # Extract to destination
+        Write-Host "Extracting drivers to $dest..."
+        Expand-Archive -Path $tempZip -DestinationPath $dest -Force
+    } catch {
+        $DeployErrors.Add("Lenovo Dock driver staging failed: $($_.Exception.Message)")
+    }
 
     # Cleanup
     Remove-Item $tempZip -Force
@@ -514,8 +532,12 @@ else {
     Write-Host "Non-Lenovo system detected. Skipping dock driver download."
 }
 
+} else {
+    Write-Host "Skipping staging - applied OS drive not found." -ForegroundColor Yellow
+}
 
-# 10. Send Teams Notification to OSDCloud Deployments channel 
+
+# 10. Send Teams Notification to OSDCloud Deployments channel
 function Send-TeamsNotificationViaWorkflow {
     param(
         [bool]$Success = $true,
@@ -730,58 +752,29 @@ function Send-TeamsNotificationViaWorkflow {
 
 Stop-Transcript
 
-# 11. Check logs for errors
-$OSDlog = Get-Item -Path $ts -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-$OSDlog = $OSDlog.FullName
+# 11. Determine success from real deployment signals, not transcript text.
+#     OSDCloud writes benign "error"/"TerminatingError" lines to the transcript
+#     (e.g. the Automate discovery Join-Path), so scanning it produced false failures.
 
-$logMissing = (-not $OSDLog)
-
-function Find-TriggerLine {
-    param ($lines)
-
-    $skipSection = $false
-
-    for ($i = 0; $i -lt $lines.Count; $i++) {
-        $line = $lines[$i]
-
-        # Detect start and end of skip section
-        if ($line -match "Microsoft update catalog drivers") {
-            $skipSection = $true
-            continue
-        }
-        if ($skipSection -and $line -match "Add Windows Driver with Offline Servicing") {
-            $skipSection = $false
-            continue
-        }
-
-        # Skip lines inside the section
-        if ($skipSection) { continue }
-
-        # Detect actual error or terminating lines outside the section
-        if (($line -like "*error*" -and $line -notlike "*erroraction*") -or $line -like "*terminat*") {
-            return $lines[$i]
-        }
-    }
-
-    return $null
+# Real signal: the OS files actually landed on the target drive.
+$osApplied = $false
+if ($osDrive) { $osApplied = Test-Path (Join-Path $osDrive 'Windows\System32') }
+if (-not $osApplied) {
+    $DeployErrors.Add("OS not applied: Windows\System32 missing on the target drive.")
 }
 
-$Success = $false
+$Success = ($DeployErrors.Count -eq 0)
+$ErrLine = if ($DeployErrors.Count) { ($DeployErrors | Select-Object -Unique) -join "`r`n" } else { $null }
 
-if (!$logMissing) {
-    $logContent = Get-Content -Path $OSDLog -ErrorAction SilentlyContinue
-    $ErrLine = Find-TriggerLine $logContent
-    if ($null -eq $ErrLine) {
-        $Success = $true
-    }
-}
+# Resolve the transcript path for archiving on success
+$OSDlog = (Get-Item -Path $ts -ErrorAction SilentlyContinue).FullName
 
 If($Success){
     Send-TeamsNotificationViaWorkflow -Success $Success
     Write-Host "`r`n#########################" -ForegroundColor Cyan 
     Write-Host "###Deployment Finished###" -ForegroundColor Cyan
     Write-Host "#########################" -ForegroundColor Cyan
-    Copy-Item -Path $OSDlog -Destination "C:\Windows\Temp\" -Force
+    if ($OSDlog) { Copy-Item -Path $OSDlog -Destination "C:\Windows\Temp\" -Force }
     Write-Host "`r`nRestarting in 15 seconds..." -ForegroundColor Green
     Start-Sleep 15
     Write-Host "`r`nStaging complete. Restarting..."
@@ -791,8 +784,8 @@ If($Success){
     Write-Host "`r`n!!!!!!!!!!!!!!!!!!!!!!!" -ForegroundColor Red
     Write-Host "!!!Deployment Failed!!!" -ForegroundColor Red
     Write-Host "!!!!!!!!!!!!!!!!!!!!!!!" -ForegroundColor Red
-    Write-Host "`r`nError line in `'$OSDlog`':" -ForegroundColor Red
-    Write-Host $ErrLine -ForegroundColor Red    
+    Write-Host "`r`nDeployment errors:" -ForegroundColor Red
+    Write-Host $ErrLine -ForegroundColor Red
     Read-Host "`r`nPress Enter to reboot"
     Restart-Computer
 }
