@@ -385,6 +385,56 @@ Invoke-Expression (Invoke-RestMethod 'https://sandbox.osdcloud.com')
 # 2. Optional defaults
 $ProgressPreference = 'SilentlyContinue'
 
+# 2a. Workaround: Microsoft Update Catalog no longer returns a parsable results table.
+#
+# catalog.update.microsoft.com now responds in 100-155s and returns a page with no
+# ctl00_catalogBody_updateMatches and no ctl00_catalogBody_noResultText element, for every query
+# including known-good KB numbers. OSD's Invoke-CatalogRequest treats that as a valid result set,
+# so [MsUpCatResponse] dereferences a null table and throws. Its catch does Write-Warning "$_",
+# producing the bare "You cannot call a method on a null-valued expression" with no context.
+# Save-MsUpCatDriver then repeats six fallback searches per device with no timeout and no failure
+# memory, which costs roughly 10 minutes per device across DiskDrive, Net and SCSIAdapter.
+#
+# Setting $Global:OSDCloud.MSCatalog* here does NOT work: Invoke-OSDCloud nulls and rebuilds the
+# whole hashtable with MSCatalog* = $true hardcoded, and nothing reassigns them afterwards.
+# A global function override does not work either, because internal module calls resolve inside the
+# module's own scope. Injecting into that scope with "function script:" does work.
+#
+# This adds a 20s timeout and latches a breaker on first failure. Measured: 20.1s once for the whole
+# deployment instead of ~10 min per device, and zero warnings. It delegates to the original function
+# whenever the page looks healthy, so it self-heals if Microsoft restores the site.
+$osdModule = Get-Module -Name OSD
+if ($osdModule) {
+    & $osdModule {
+        $script:MsUpCatOriginal = ${function:Invoke-CatalogRequest}
+        $script:MsUpCatBroken   = $false
+        function script:Invoke-CatalogRequest {
+            param(
+                [Parameter(Mandatory = $true)][string]$Uri,
+                [Parameter(Mandatory = $false)][string]$Method = 'Get'
+            )
+            if ($script:MsUpCatBroken) { return }
+            try {
+                $probe = Invoke-WebRequest -Uri $Uri -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop `
+                            -Headers @{ 'Cache-Control' = 'no-cache'; 'Pragma' = 'no-cache' }
+                if ($probe.Content -notmatch 'ctl00_catalogBody_updateMatches') {
+                    $script:MsUpCatBroken = $true
+                    Write-Host -ForegroundColor DarkGray '[i] Update Catalog returned no results table. Skipping all catalog lookups.'
+                    return
+                }
+                return (& $script:MsUpCatOriginal -Uri $Uri -Method $Method)
+            }
+            catch {
+                $script:MsUpCatBroken = $true
+                Write-Host -ForegroundColor DarkGray "[i] Update Catalog unavailable: $(($_.Exception.Message -split "`n")[0]). Skipping all catalog lookups."
+            }
+        }
+    }
+}
+else {
+    Write-Host -ForegroundColor Yellow '[!] OSD module not loaded; Update Catalog workaround not applied.'
+}
+
 # 3. Apply OS
 try {
     Start-OSDCloud -OSBuild "25H2" -OSEdition "Pro" -OSLanguage "en-us" -OSLicense "Retail" -SkipAutopilot -ZTI
@@ -833,3 +883,4 @@ If($Success){
     Read-Host "`r`nPress Enter to reboot"
     Restart-Computer
 }
+
