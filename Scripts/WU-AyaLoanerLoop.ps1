@@ -447,97 +447,213 @@ function Ensure-ComputerNameNoReboot {
     }
 }
 
-function Install-TeamViewerHost {
-    if (-not (Test-Path "C:\Program Files\TeamViewer\TeamViewer.exe")) {
-        Write-Log "Installing Teamviewer Host from Winget..."
-        $TVcmd="install Teamviewer.Teamviewer.Host -s winget --accept-source-agreements --accept-package-agreements -h"
-        $TVProc= Start-Process winget -ArgumentList $TVcmd -NoNewWindow -PassThru -Wait
-        Write-Log "TeamViewer Host Winget install complete (exit code $($TVProc.ExitCode))."
-    }else {
-        Write-Log "TeamViewer Host is already installed."
-    }
-    Return
+function ConvertTo-NinjaOneSafeFlowText {
+    # Mirrors InstallNinjaOne.ps1 so the Power Automate flow receives the same shape of text.
+    param([string]$Text)
+
+    if ($null -eq $Text) { return '' }
+
+    $safe = [string]$Text
+    $safe = $safe -replace '[\r\n]+', ' '
+    $safe = $safe -replace '\\', '/'
+    $safe = $safe -replace '"', "'"
+    return $safe.Trim()
 }
 
-function Invoke-TeamViewerAssignment {
-    # Embedded and hardened version of TeamViewerHostFFUPosttInstallScript.ps1
-    $TeamViewerExe = Join-Path $env:ProgramFiles 'TeamViewer\TeamViewer.exe'
-    if (-not (Test-Path -LiteralPath $TeamViewerExe)) {
-        throw "TeamViewer.exe not found at expected path: $TeamViewerExe"
+function Get-NinjaOneLoanerSystemInfo {
+    # Payload fields must match InstallNinjaOne.ps1 exactly or the flow will not bind them.
+    # Location is always 'SD' for loaners, so it is set statically here rather than doing the
+    # ipinfo geo lookup InstallNinjaOne.ps1 performs, which can block this loop for minutes.
+    $deviceName = [string]$env:COMPUTERNAME
+
+    $consoleUser = $null
+    try { $consoleUser = Get-CurrentConsoleUser } catch {}
+
+    if (-not $consoleUser) {
+        try { $consoleUser = (Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).UserName } catch {}
     }
 
-    $managementId = $null
-    $regPath = 'HKLM:\SOFTWARE\TeamViewer\DeviceManagementV2'
-    $tvAlias = "AyaLoaner ($env:COMPUTERNAME)"
-    $assignmentName = "Aya -MDM (Default)"
-    $assignmentID = '0001CoABChAX-lbQxD8R7qytiEFOIK1KEigIACAAAgAJABSqiBRKbHQ-wRU1F9pGHO7J1VR52ckJ_WIsx5FWjJ_PGkAa3kkthbKy5IqjzSa1nhuP9KU2iJgHsqJxUnPwHHi-nkosOzxCctuqarDVSqwUCTUcwMbc-_8PW1838rMciJMXIAEQsO-OjAs='
-    
-    if (Test-Path -LiteralPath $regPath) {
+    if ([string]::IsNullOrWhiteSpace($consoleUser)) {
+        $consoleUser = 'Unknown'
+    } elseif ($consoleUser -match '\\') {
+        $consoleUser = ($consoleUser -split '\\')[-1]
+    }
+
+    return [pscustomobject]@{
+        DeviceName  = $deviceName
+        ConsoleUser = [string]$consoleUser
+        Location    = 'SD'
+        TimeStamp   = [string](Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+    }
+}
+
+function Send-NinjaOneTeamsNotification {
+    # Same Power Automate trigger used by InstallNinjaOne.ps1 (Intune NinjaOneAgent-Global).
+    param(
+        [ValidateSet('SUCCESS','FAILED')]
+        [string]$Status,
+
+        [psobject]$SystemInfo,
+
+        [string]$Detail
+    )
+
+    $uri = 'https://defaultc32ce2354d9a4296a647a9edb2912a.c9.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/4e46df972c7640129718a5cb9337bf0e/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=b2aaurbKkWS2SYgkqQ4x4v6mE40cy9Vj-o9AdrIxvFs'
+
+    if (-not $SystemInfo) { $SystemInfo = Get-NinjaOneLoanerSystemInfo }
+
+    # InstallNinjaOne.ps1 appends the failure reason onto TimeStamp because the flow has no
+    # dedicated detail field. Matching that behaviour keeps one card layout for both scripts.
+    $timeStamp = [string]$SystemInfo.TimeStamp
+    if ($Detail) { $timeStamp = "$timeStamp $Detail" }
+
+    $bodyObject = [ordered]@{
+        deviceName  = ConvertTo-NinjaOneSafeFlowText $SystemInfo.DeviceName
+        consoleUser = ConvertTo-NinjaOneSafeFlowText $SystemInfo.ConsoleUser
+        location    = ConvertTo-NinjaOneSafeFlowText $SystemInfo.Location
+        status      = ConvertTo-NinjaOneSafeFlowText $Status
+        timestamp   = ConvertTo-NinjaOneSafeFlowText $timeStamp
+    }
+
+    $json = $bodyObject | ConvertTo-Json -Compress
+    Write-Log "Sending NinjaOne Teams payload: $json"
+
+    Invoke-RestMethod -Uri $uri -Method Post -ContentType 'application/json' -Body $json -TimeoutSec 60 -ErrorAction Stop | Out-Null
+    Write-Log "NinjaOne Teams notification sent. [$Status]"
+}
+
+function Send-NinjaOneTeamsNotificationSafe {
+    # A card that fails to post must never break or fail the deployment.
+    param(
+        [ValidateSet('SUCCESS','FAILED')]
+        [string]$Status,
+
+        [string]$Detail
+    )
+
+    try {
+        $info = Get-NinjaOneLoanerSystemInfo
+        Send-NinjaOneTeamsNotification -Status $Status -SystemInfo $info -Detail $Detail
+    } catch {
+        Write-Log "NinjaOne $Status Teams notification failed: $($_.Exception.Message)" "WARN"
+    }
+}
+
+function Get-NinjaOneNodeId {
+    # NinjaOne writes NodeId under the agent key only after the agent has checked in
+    # and enrolled against the division. Its presence is the enrollment signal, which is
+    # stronger than an install check: the MSI can land successfully and still never enroll.
+    # Both hives are checked because the x86 MSI lands under WOW6432Node while the
+    # x86-64 MSI may land in the native hive.
+    $agentKeys = @(
+        'HKLM:\SOFTWARE\NinjaRMM LLC\NinjaRMMAgent\Agent',
+        'HKLM:\SOFTWARE\WOW6432Node\NinjaRMM LLC\NinjaRMMAgent\Agent'
+    )
+
+    foreach ($key in $agentKeys) {
+        if (-not (Test-Path -LiteralPath $key)) { continue }
+
+        $nodeId = $null
+        try { $nodeId = (Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue).'NodeId' } catch {}
+
+        # Absent, empty, or 0 all mean "not enrolled yet".
+        if ($null -eq $nodeId) { continue }
+        $nodeIdText = ([string]$nodeId).Trim()
+        if (-not $nodeIdText -or $nodeIdText -eq '0') { continue }
+
+        return [pscustomobject]@{
+            NodeId  = $nodeIdText
+            RegPath = $key
+        }
+    }
+
+    return $null
+}
+
+function Install-NinjaOneAgent {
+    # Org/location/role are baked into this installer, so no command-line arguments
+    # are needed and no separate assignment step is required.
+    # NOTE: the agent version is part of the URL path. NinjaOne rotates these links on
+    # agent upgrades, so a 404 here means the link needs to be regenerated in the console
+    # (Add > Device > Windows > Generate Installer > Copy link).
+    $installerUrl = 'https://us2.ninjarmm.com/agent/installer/61a0e9d4-9a7a-4880-be61-618d3b0584e6/14.0.8848/NinjaOne-Agent-AyaHealthcareUnmanaged-MainOffice-Auto-x86-64.msi'
+
+    $existing = Get-NinjaOneNodeId
+    if ($existing) {
+        Write-Log "NinjaOne agent is already enrolled. [NodeId=$($existing.NodeId)][$($existing.RegPath)]"
+        return
+    }
+
+    $msiPath = Join-Path $StagingDir 'NinjaOne-Agent.msi'
+    $msiLog  = Join-Path $StagingDir 'NinjaOne-Agent.msi.log'
+
+    # Download with retries. Transient network failures are common this early after OOBE.
+    $downloaded = $false
+    for ($iCount = 1; $iCount -le 5; $iCount++) {
         try {
-            $managementId = (Get-ItemProperty -LiteralPath $regPath -ErrorAction SilentlyContinue).'ManagementId'
-        } catch {
-            # Keep null, continue retrying
-            $managementId = $null
-        }
-    } 
-
-    if ($managementId) {
-        $registrationSucceeded = $true
-        Write-Log "TeamViewer registration confirmed. ManagementId present. [$tvAlias][$assignmentName]"
-        Return
-    } else {
-        # Use the effective computer name at runtime (post-rename, post-reboot).
-        Write-Log "Waiting 15 seconds for TeamViewer to initialize"
-        Start-Sleep -Seconds 15
-        $registrationSucceeded = $false
-
-        for ($iCount = 1; $iCount -le 10; $iCount++) {
-            $managementId = $null
-
-            $regPath = 'HKLM:\SOFTWARE\TeamViewer\DeviceManagementV2'
-            if (Test-Path -LiteralPath $regPath) {
-                try {
-                    $managementId = (Get-ItemProperty -LiteralPath $regPath -ErrorAction SilentlyContinue).'ManagementId'
-                } catch {
-                    # Keep null, continue retrying
-                    $managementId = $null
-                }
-            } else {
-                # Do NOT throw. It may not exist yet while TV is still initializing.
-                Write-Log "[$iCount] TeamViewer management key not present yet: [$regPath]. Will retry."
-            }
-
-            if ($managementId) {
-                $registrationSucceeded = $true
-                Write-Log "[$iCount] TeamViewer registration confirmed. ManagementId present. [$tvAlias][$assignmentName]"
-                break
-            }
-
-            if ($iCount -ge 10) {
-                throw "TeamViewer registration aborted after $iCount attempts. ManagementId never appeared. [$tvAlias][$assignmentName]"
-            }
-
-            Write-Log "[$iCount] Attempting TeamViewer assignment. [$tvAlias][$assignmentName]"
+            Write-Log "[$iCount] Downloading NinjaOne agent MSI."
+            $prevProgress = $ProgressPreference
+            $ProgressPreference = 'SilentlyContinue'
             try {
-                if (-not (Get-Process -Name 'teamviewer' -ErrorAction SilentlyContinue)) {
-                    Start-Process -FilePath $TeamViewerExe | Out-Null
-                    Start-Sleep -Seconds 5
-                }
-
-                $p = Start-Process -FilePath $TeamViewerExe -ArgumentList "assignment --id $assignmentID --device-alias=`"$tvAlias`" --retries=5 --timeout=120" -Wait -PassThru
-                Write-Log "[$iCount] Attempted TeamViewer assignment finished. ExitCode=$($p.ExitCode). [$tvAlias][$assignmentName]"
-            } catch {
-                Write-Log "[$iCount] Attempted TeamViewer assignment failed: $($_.Exception.Message)"
+                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                Invoke-WebRequest -Uri $installerUrl -OutFile $msiPath -UseBasicParsing -ErrorAction Stop
+            } finally {
+                $ProgressPreference = $prevProgress
             }
 
-            Write-Log "[$iCount] Checking registration in 30 seconds."
-            Start-Sleep -Seconds 30
-        }
+            $size = (Get-Item -LiteralPath $msiPath).Length
+            if ($size -lt 1MB) { throw "Downloaded file is only $size bytes. Expected an MSI." }
 
-        if (-not $registrationSucceeded) {
-            throw "Failed to register TeamViewer after retries. [$tvAlias][$assignmentName]"
+            $downloaded = $true
+            Write-Log "[$iCount] NinjaOne agent MSI downloaded. Size=$([math]::Round($size/1MB,2)) MB."
+            break
+        } catch {
+            $status = $null
+            try { $status = [int]$_.Exception.Response.StatusCode } catch {}
+            $statusText = if ($status) { " HTTP=$status" } else { "" }
+            Write-Log "[$iCount] NinjaOne agent MSI download failed.$statusText $($_.Exception.Message)" "WARN"
+            if ($status -eq 404) {
+                throw "NinjaOne installer URL returned 404. The versioned link has expired and must be regenerated in the NinjaOne console."
+            }
+            Start-Sleep -Seconds 20
         }
     }
+
+    if (-not $downloaded) {
+        throw "Failed to download the NinjaOne agent MSI after 5 attempts."
+    }
+
+    Write-Log "Installing NinjaOne agent via msiexec."
+    $msiArgs = @('/i', "`"$msiPath`"", '/qn', '/norestart', '/l*v', "`"$msiLog`"")
+    $proc = Start-Process -FilePath 'msiexec.exe' -ArgumentList $msiArgs -Wait -PassThru
+    $exit = $proc.ExitCode
+
+    # 0 = success, 3010 = success but a reboot is pending. The WU loop reboots anyway.
+    if ($exit -ne 0 -and $exit -ne 3010) {
+        throw "NinjaOne agent install failed. msiexec exit code $exit. See $msiLog."
+    }
+    Write-Log "NinjaOne agent msiexec completed. ExitCode=$exit."
+
+    # Wait for enrolment rather than trusting the msiexec exit code. NodeId is written only
+    # after the agent has successfully checked in, so this also proves outbound connectivity.
+    $enrolled = $null
+    for ($iCount = 1; $iCount -le 20; $iCount++) {
+        $enrolled = Get-NinjaOneNodeId
+        if ($enrolled) {
+            Write-Log "NinjaOne enrolment confirmed. [NodeId=$($enrolled.NodeId)][$($enrolled.RegPath)]"
+            break
+        }
+        Write-Log "[$iCount] NinjaOne NodeId not present yet. Rechecking in 15 seconds."
+        Start-Sleep -Seconds 15
+    }
+
+    if (-not $enrolled) {
+        throw "NinjaOne agent installed (msiexec exit code $exit) but NodeId never appeared after 5 minutes. See $msiLog."
+    }
+
+    try { Remove-Item -LiteralPath $msiPath -Force -ErrorAction Stop } catch {}
+
+    Send-NinjaOneTeamsNotificationSafe -Status SUCCESS
 }
 
 function Install-GoogleChromeEnterprise {
@@ -610,20 +726,26 @@ try {
     # CHANGED: show current state at start (helps confirm PassCount is persisting)
     Write-Log ("Loaded state: StageComplete={0}, PassCount={1}, LastAction={2}" -f $state.StageComplete, $state.PassCount, $state.LastAction)
 
-    # Install TVHost only after the renamed computer name is actually in effect.
+    # Install the NinjaOne agent only after the renamed computer name is actually in effect,
+    # so the device enrols under its final name.
     # The first boot may request a rename without rebooting, so the effective name
     # might still be the original name in this same session.
     if ($env:COMPUTERNAME -notmatch '^WFD-') {
-        msg * /TIME:9999999 "Finishing up the final deployment steps. Please wait..." 
-        Write-Log "TVHost Installation deferred: effective computer name '$($env:COMPUTERNAME)' does not start with 'WFD-'."
+        msg * /TIME:9999999 "Finishing up the final deployment steps. Please wait..."
+        Write-Log "NinjaOne agent installation deferred: effective computer name '$($env:COMPUTERNAME)' does not start with 'WFD-'."
         # Ensure the computer is named FFD-<serial> (12 chars max). No reboot is performed here.
         $desiredName = Get-DesiredComputerName
         Ensure-ComputerNameNoReboot -DesiredName $desiredName
     } else {
-        Install-TeamViewerHost
-        Invoke-TeamViewerAssignment
-		Install-GoogleChromeEnterprise
-    }    
+        Write-Log "Installing NinjaOne agent..."
+        try {
+            Install-NinjaOneAgent
+        } catch {
+            Send-NinjaOneTeamsNotificationSafe -Status FAILED -Detail $_.Exception.Message
+            throw
+        }
+        Install-GoogleChromeEnterprise
+    }
 
     # Ensure WU service running
     try {
