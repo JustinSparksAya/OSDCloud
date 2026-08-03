@@ -570,6 +570,38 @@ function Get-NinjaOneNodeId {
     return $null
 }
 
+function Test-NinjaOneMsiFile {
+    # Ported from InstallNinjaOne.ps1. A 403 or captive-portal response can still write a
+    # file to disk, so confirm the payload is a real MSI database and not an HTML error page.
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "Downloaded NinjaOne MSI not found: $Path"
+    }
+
+    $fileInfo = Get-Item -LiteralPath $Path -ErrorAction Stop
+    if ($fileInfo.Length -le 0) {
+        throw "Downloaded NinjaOne MSI is empty: $Path"
+    }
+    if ($fileInfo.Length -lt 1MB) {
+        throw "Downloaded NinjaOne MSI is only $($fileInfo.Length) bytes. Expected an MSI."
+    }
+
+    try {
+        $installer = New-Object -ComObject WindowsInstaller.Installer
+        $database = $installer.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $installer, @($Path, 0))
+        if ($null -ne $database) {
+            [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($database)
+        }
+        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($installer)
+    } catch {
+        throw "Downloaded file is not a valid MSI database: $Path. $($_.Exception.Message)"
+    }
+}
+
 function Install-NinjaOneAgent {
     # Org/location/role are baked into this installer, so no command-line arguments
     # are needed and no separate assignment step is required.
@@ -587,6 +619,18 @@ function Install-NinjaOneAgent {
     $msiPath = Join-Path $StagingDir 'NinjaOne-Agent.msi'
     $msiLog  = Join-Path $StagingDir 'NinjaOne-Agent.msi.log'
 
+    # The default Windows PowerShell 5.1 User-Agent gets a 403 from us2.ninjarmm.com.
+    # Confirmed on a loaner: default UA = 403 Forbidden, browser UA = 200 OK, same URL,
+    # same host, no proxy. InstallNinjaOne.ps1 (Intune) sends a browser UA for this reason,
+    # so the session/header set below is copied from it deliberately. Do not "simplify" it.
+    $userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36'
+    $headers = @{
+        'Accept'          = '*/*'
+        'Accept-Language' = 'en-US,en;q=0.9'
+        'Cache-Control'   = 'no-cache'
+        'Pragma'          = 'no-cache'
+    }
+
     # Download with retries. Transient network failures are common this early after OOBE.
     $downloaded = $false
     for ($iCount = 1; $iCount -le 5; $iCount++) {
@@ -596,14 +640,17 @@ function Install-NinjaOneAgent {
             $ProgressPreference = 'SilentlyContinue'
             try {
                 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-                Invoke-WebRequest -Uri $installerUrl -OutFile $msiPath -UseBasicParsing -ErrorAction Stop
+                $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+                $session.UserAgent = $userAgent
+                Invoke-WebRequest -Uri $installerUrl -WebSession $session -Headers $headers -Method Get `
+                    -OutFile $msiPath -UseBasicParsing -MaximumRedirection 10 -ErrorAction Stop
             } finally {
                 $ProgressPreference = $prevProgress
             }
 
-            $size = (Get-Item -LiteralPath $msiPath).Length
-            if ($size -lt 1MB) { throw "Downloaded file is only $size bytes. Expected an MSI." }
+            Test-NinjaOneMsiFile -Path $msiPath
 
+            $size = (Get-Item -LiteralPath $msiPath).Length
             $downloaded = $true
             Write-Log "[$iCount] NinjaOne agent MSI downloaded. Size=$([math]::Round($size/1MB,2)) MB."
             break
@@ -619,8 +666,31 @@ function Install-NinjaOneAgent {
         }
     }
 
+    # Fall back to BITS, which uses its own HTTP stack and is not subject to the UA block.
     if (-not $downloaded) {
-        throw "Failed to download the NinjaOne agent MSI after 5 attempts."
+        Write-Log "Invoke-WebRequest failed after 5 attempts. Falling back to BITS." "WARN"
+        try {
+            if (-not (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue)) {
+                throw "Start-BitsTransfer is not available."
+            }
+            if (Test-Path -LiteralPath $msiPath) { Remove-Item -LiteralPath $msiPath -Force -ErrorAction SilentlyContinue }
+
+            # Foreground priority matches what was benchmarked on a loaner (0.22 MB/s, on par
+            # with Invoke-WebRequest). Background priority yields to other traffic and would be
+            # slower here for no benefit, since nothing else is competing during deployment.
+            Start-BitsTransfer -Source $installerUrl -Destination $msiPath -Priority Foreground -ErrorAction Stop
+            Test-NinjaOneMsiFile -Path $msiPath
+
+            $size = (Get-Item -LiteralPath $msiPath).Length
+            $downloaded = $true
+            Write-Log "BITS NinjaOne agent MSI download succeeded. Size=$([math]::Round($size/1MB,2)) MB."
+        } catch {
+            Write-Log "BITS NinjaOne agent MSI download failed: $($_.Exception.Message)" "WARN"
+        }
+    }
+
+    if (-not $downloaded) {
+        throw "Failed to download the NinjaOne agent MSI after 5 Invoke-WebRequest attempts and a BITS fallback."
     }
 
     Write-Log "Installing NinjaOne agent via msiexec."
