@@ -96,35 +96,24 @@ If ($onSubnet) {
 
     #Connecting to Network share
    
-    $User  = 'OSDCloud@corp.ayahealthcare.com'
+    # The share account and PFX password are baked into boot.wim at build time, so they stay out of this public script
+    $SecretsFile = "$env:SystemRoot\System32\OSDCloudSecrets.json"
+    if (-not (Test-Path $SecretsFile)) {
+        Write-Host "$SecretsFile not found. This boot image needs to be rebuilt."
+        exit 1
+    }
+    $Secrets = Get-Content $SecretsFile -Raw | ConvertFrom-Json
+
+    $User  = $Secrets.ShareUser
     $Share = '\\corp-wdsvm-01\AYA-IT'
     $Drive = 'Z:'
-        
+
     if (-not (Test-Path "$Drive\")) {
-
-        # Replace this value with the Enc output from the helper script
-        $Enc   = '76492d1116743f0423413b16050a5345MgB8AFgANQBrAGcAbwBaAHMAUABYAEYAdwBnADEAOABlAEcAbgBaAHEAdwBjAFEAPQA9AHwANQAxAGYAYgA0ADMAOQBlAGUAZgA2AGYAZQA4ADAAMQBmADAANABjADIANwBjADIAMwBkAGUAOAA0ADEAOQAyAGIAMgBkADEAYwBmAGQAZgA0ADEAMAAxAGIANgAwAGUAYQBhADcAMwAyADIAOQBiAGUAMQA5ADgAOAAzADEAMQA='
-
-        [byte[]]$Key = @(17,208,162,81,196,107,230,240,247,48,225,30,25,178,96,8,134,161,94,80,51,221,61,197,76,180,28,105,205,232,241,148)
-        # ======================
-
-        # Recreate the SecureString in memory
-        $Sec = ConvertTo-SecureString -String $Enc -Key $Key
-
-        # Extract a plain string for the native tool call
-        $BSTR  = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Sec)
-        $Plain = [Runtime.InteropServices.Marshal]::PtrToStringUni($BSTR)
 
         # Map with net use
         $rc = Start-Process -FilePath net.exe `
-            -ArgumentList @('use', $Drive, $Share, "/user:$User", $Plain, '/persistent:no') `
+            -ArgumentList @('use', $Drive, $Share, "/user:$User", $Secrets.SharePassword, '/persistent:no') `
             -NoNewWindow -Wait -PassThru
-
-        # Clean up sensitive material in memory
-        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTR)
-        $Plain = $null
-        [System.GC]::Collect()
-        [System.GC]::WaitForPendingFinalizers()
 
         if ($rc.ExitCode -eq 0) {
             Write-Host "Mapped $Drive to $Share as $User."
@@ -143,9 +132,17 @@ If ($onSubnet) {
     }
 
     # Import the certificate
+    # Uses the newest unexpired osdcloud-*.pfx that opens with the baked in password, so a yearly renewal
+    # only needs the new PFX on the share and the cert added to the app registration
     Write-Host "Importing Certificate"
-    $CertPath = 'Z:\Certs\osdcloud-20261030.pfx'
-    $cert  = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($CertPath,"CertPassword")
+    $cert = Get-ChildItem "$Drive\Certs\osdcloud-*.pfx" | ForEach-Object {
+        try { New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($_.FullName, $Secrets.PfxPassword) -ErrorAction Stop } catch {}
+    } | Where-Object { $_.HasPrivateKey -and $_.NotAfter -gt (Get-Date) } | Sort-Object NotAfter -Descending | Select-Object -First 1
+    if (-not $cert) {
+        Write-Host "No usable certificate found in $Drive\Certs"
+        exit 1
+    }
+    Write-Host "Using certificate $($cert.Subject) ($($cert.Thumbprint)), expires $($cert.NotAfter)"
     $store = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root','LocalMachine')
     $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
     $store.Add($cert)
@@ -156,7 +153,7 @@ If ($onSubnet) {
     # --- Set variables ---
 
     $clientId = "0df5ca16-daf3-40bc-9b44-567253b54baa"
-    $clientThumbprint = "3932CAE2D5BB3B6114ABB10CCE6FE73F44CC599C"
+    $clientThumbprint = $cert.Thumbprint
     $tenantId = "c32ce235-4d9a-4296-a647-a9edb2912ac9"
 
 
