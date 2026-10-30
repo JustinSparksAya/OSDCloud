@@ -144,7 +144,7 @@ If ($onSubnet) {
 
     # Import the certificate
     Write-Host "Importing Certificate"
-    $CertPath = 'Z:\Certs\osdcloud-20251103.pfx'
+    $CertPath = 'Z:\Certs\osdcloud-20261030.pfx'
     $cert  = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($CertPath,"CertPassword")
     $store = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root','LocalMachine')
     $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
@@ -156,7 +156,7 @@ If ($onSubnet) {
     # --- Set variables ---
 
     $clientId = "0df5ca16-daf3-40bc-9b44-567253b54baa"
-    $clientThumbprint = "2C9B6CD1B27D959851505E53CCB05B7105796FB8"
+    $clientThumbprint = "3932CAE2D5BB3B6114ABB10CCE6FE73F44CC599C"
     $tenantId = "c32ce235-4d9a-4296-a647-a9edb2912ac9"
 
 
